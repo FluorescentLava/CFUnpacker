@@ -1,0 +1,10 @@
+{
+  "profiles": {
+    "CarrotUnpacker (Package)": {
+      "commandName": "MsixPackage"
+    },
+    "CarrotUnpacker (Unpackaged)": {
+      "commandName": "Project"
+    }
+  }
+}
