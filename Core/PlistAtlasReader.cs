@@ -3,9 +3,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Xml;
 using System.Xml.Linq;
-using CarrotUnpacker.Models;
+using CFUnpacker.Models;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 internal readonly record struct IntSize(int Width, int Height);
 internal readonly record struct IntRect(int X, int Y, int Width, int Height);

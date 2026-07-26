@@ -1,9 +1,9 @@
 {
   "profiles": {
-    "CarrotUnpacker (Package)": {
+    "CFUnpacker (Package)": {
       "commandName": "MsixPackage"
     },
-    "CarrotUnpacker (Unpackaged)": {
+    "CFUnpacker (Unpackaged)": {
       "commandName": "Project"
     }
   }

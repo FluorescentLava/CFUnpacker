@@ -1,13 +1,13 @@
 using System.Runtime.InteropServices;
 using System.IO.Compression;
-using CarrotUnpacker.Core;
-using CarrotUnpacker.Models;
+using CFUnpacker.Core;
+using CFUnpacker.Models;
 using SkiaSharp;
 
 string seriesRoot = Path.Combine(
     Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
     "保卫萝卜系列解包");
-string temporaryRoot = Path.Combine(Path.GetTempPath(), $"CarrotUnpacker-verify-{Guid.NewGuid():N}");
+string temporaryRoot = Path.Combine(Path.GetTempPath(), $"CFUnpacker-verify-{Guid.NewGuid():N}");
 Directory.CreateDirectory(temporaryRoot);
 
 if (args.Length >= 2 &&

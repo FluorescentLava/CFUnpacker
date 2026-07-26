@@ -1,6 +1,6 @@
 using Microsoft.UI.Xaml;
 
-namespace CarrotUnpacker;
+namespace CFUnpacker;
 
 public partial class App : Application
 {

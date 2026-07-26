@@ -3,7 +3,7 @@ using System.Numerics;
 using System.Runtime.InteropServices;
 using SkiaSharp;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 internal static class PvrDecoder
 {

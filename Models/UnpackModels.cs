@@ -1,4 +1,4 @@
-namespace CarrotUnpacker.Models;
+namespace CFUnpacker.Models;
 
 public enum UnpackStage
 {

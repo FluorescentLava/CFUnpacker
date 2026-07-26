@@ -1,8 +1,8 @@
 using Microsoft.UI.Xaml;
 using Windows.Graphics;
-using CarrotUnpacker.Core;
+using CFUnpacker.Core;
 
-namespace CarrotUnpacker;
+namespace CFUnpacker;
 
 public sealed partial class MainWindow : Window
 {

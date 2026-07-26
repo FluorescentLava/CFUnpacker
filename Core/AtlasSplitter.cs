@@ -1,9 +1,9 @@
-using CarrotUnpacker.Models;
+using CFUnpacker.Models;
 using SkiaSharp;
 using System.Buffers;
 using System.Runtime.InteropServices;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 internal sealed record AtlasSplitResult(
     int FramesWritten,

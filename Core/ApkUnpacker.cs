@@ -2,9 +2,9 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
-using CarrotUnpacker.Models;
+using CFUnpacker.Models;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 public sealed class ApkUnpacker
 {

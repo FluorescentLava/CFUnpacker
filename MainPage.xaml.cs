@@ -1,6 +1,6 @@
 using System.Diagnostics;
-using CarrotUnpacker.Core;
-using CarrotUnpacker.Models;
+using CFUnpacker.Core;
+using CFUnpacker.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Media;
@@ -8,7 +8,7 @@ using Microsoft.Windows.Storage.Pickers;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
 
-namespace CarrotUnpacker;
+namespace CFUnpacker;
 
 public sealed partial class MainPage : Page
 {
@@ -184,11 +184,6 @@ public sealed partial class MainPage : Page
             _cancellation = null;
             SetBusy(false);
         }
-    }
-
-    private void CancelButton_Click(object sender, RoutedEventArgs e)
-    {
-        CancelUnpack();
     }
 
     private void ProgressDialog_PrimaryButtonClick(
@@ -470,7 +465,6 @@ public sealed partial class MainPage : Page
         ApkDropTarget.AllowDrop = !busy;
         ShowLogButton.IsEnabled = !busy;
         StartButton.IsEnabled = !busy;
-        CancelButton.IsEnabled = busy;
 
         if (busy)
         {
@@ -556,7 +550,6 @@ public sealed partial class MainPage : Page
 
     private void CancelUnpack()
     {
-        CancelButton.IsEnabled = false;
         ProgressDialog.IsPrimaryButtonEnabled = false;
         StatusTextBlock.Text = "正在取消并清理…";
         _cancellation?.Cancel();

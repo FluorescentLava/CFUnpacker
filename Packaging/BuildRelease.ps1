@@ -7,8 +7,7 @@ $ErrorActionPreference = 'Stop'
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $launcherOutput = Join-Path $PSScriptRoot 'bin'
 $releaseDirectory = ([char]0x53D1).ToString() + [char]0x5E03
-$zipName = ([char]0x4FDD).ToString() + [char]0x536B + [char]0x841D + [char]0x535C +
-    [char]0x7CFB + [char]0x5217 + [char]0x89E3 + [char]0x5305 + [char]0x5DE5 + [char]0x5177 + '-win-x64.zip'
+$zipName = 'CFUnpacker-win-x64.zip'
 $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
 if (-not (Test-Path -LiteralPath $vswhere)) {
     throw 'Visual Studio C++ build tools are required to build the runtime launcher.'
@@ -44,20 +43,20 @@ try {
 
     $runtime = Join-Path $releaseRoot 'runtime'
     New-Item -ItemType Directory -Force -Path $runtime | Out-Null
-    & dotnet publish CarrotUnpacker.csproj -c $Configuration -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true "-p:PublishDir=$runtime\" --no-restore
+    & dotnet publish CFUnpacker.csproj -c $Configuration -r win-x64 --self-contained true -p:Platform=x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true "-p:PublishDir=$runtime\" --no-restore
     if ($LASTEXITCODE -ne 0) {
         throw "Publish failed: $LASTEXITCODE"
     }
 
     foreach ($file in @(
-        'CarrotUnpacker.deps.json',
-        'CarrotUnpacker.dll',
-        'CarrotUnpacker.pri',
-        'CarrotUnpacker.runtimeconfig.json')) {
+        'CFUnpacker.deps.json',
+        'CFUnpacker.dll',
+        'CFUnpacker.pri',
+        'CFUnpacker.runtimeconfig.json')) {
         Copy-Item -LiteralPath (Join-Path $runtime $file) -Destination (Join-Path $releaseRoot $file)
     }
 
-    Copy-Item -LiteralPath (Join-Path $launcherOutput 'RuntimeLauncher.exe') -Destination (Join-Path $releaseRoot 'CarrotUnpacker.exe')
+    Copy-Item -LiteralPath (Join-Path $launcherOutput 'RuntimeLauncher.exe') -Destination (Join-Path $releaseRoot 'CFUnpacker.exe')
     $zipPath = Join-Path $releaseParent $zipName
     Compress-Archive -LiteralPath $releaseRoot -DestinationPath $zipPath -CompressionLevel Optimal -Force
     Get-Item -LiteralPath $zipPath

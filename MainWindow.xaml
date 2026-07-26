@@ -1,11 +1,11 @@
 <?xml version="1.0" encoding="utf-8" ?>
 <Window
-    x:Class="CarrotUnpacker.MainWindow"
+    x:Class="CFUnpacker.MainWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     xmlns:d="http://schemas.microsoft.com/expression/blend/2008"
     xmlns:mc="http://schemas.openxmlformats.org/markup-compatibility/2006"
-    Title="保卫萝卜系列解包工具"
+    Title="CFUnpacker"
     mc:Ignorable="d">
     <Window.SystemBackdrop>
         <MicaBackdrop />
@@ -20,7 +20,7 @@
         <TitleBar
             x:Name="AppTitleBar"
             Subtitle="熔萤FluorescentLava"
-            Title="保卫萝卜系列解包工具">
+            Title="CFUnpacker">
             <TitleBar.IconSource>
                 <ImageIconSource ImageSource="Assets/AppIcon.ico" />
             </TitleBar.IconSource>

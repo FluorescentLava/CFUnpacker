@@ -1,8 +1,8 @@
 using System.Diagnostics;
 using System.IO.Compression;
-using CarrotUnpacker.Models;
+using CFUnpacker.Models;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 internal sealed record ApkGameDetection(
     GameProfile? Profile,

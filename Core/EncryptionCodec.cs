@@ -1,9 +1,9 @@
 using System.Buffers.Binary;
 using System.Collections.Concurrent;
 using System.IO.Compression;
-using CarrotUnpacker.Models;
+using CFUnpacker.Models;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 internal static class EncryptionCodec
 {

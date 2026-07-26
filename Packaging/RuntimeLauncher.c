@@ -38,14 +38,14 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     DWORD length = GetModuleFileNameW(NULL, launcherPath, ARRAYSIZE(launcherPath));
     if (length == 0 || length == ARRAYSIZE(launcherPath))
     {
-        MessageBoxW(NULL, L"Unable to locate the launcher.", L"Carrot Unpacker", MB_ICONERROR);
+        MessageBoxW(NULL, L"Unable to locate the launcher.", L"CFUnpacker", MB_ICONERROR);
         return 1;
     }
 
     wchar_t* lastSeparator = wcsrchr(launcherPath, L'\\');
     if (lastSeparator == NULL)
     {
-        MessageBoxW(NULL, L"Invalid launcher location.", L"Carrot Unpacker", MB_ICONERROR);
+        MessageBoxW(NULL, L"Invalid launcher location.", L"CFUnpacker", MB_ICONERROR);
         return 1;
     }
 
@@ -61,11 +61,11 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
     if (swprintf_s(
             childCommandLine,
             ARRAYSIZE(childCommandLine),
-            L"\"%s\\CarrotUnpacker.exe\" %s",
+            L"\"%s\\CFUnpacker.exe\" %s",
             runtimeDirectory,
             arguments) < 0)
     {
-        MessageBoxW(NULL, L"The command line is too long.", L"Carrot Unpacker", MB_ICONERROR);
+        MessageBoxW(NULL, L"The command line is too long.", L"CFUnpacker", MB_ICONERROR);
         return 1;
     }
 
@@ -87,7 +87,7 @@ int WINAPI wWinMain(HINSTANCE instance, HINSTANCE previous, PWSTR commandLine, i
         MessageBoxW(
             NULL,
             L"The runtime folder is missing or cannot be started.",
-            L"Carrot Unpacker",
+            L"CFUnpacker",
             MB_ICONERROR);
         return 1;
     }

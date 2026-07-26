@@ -1,7 +1,7 @@
 using System.ComponentModel;
 using System.Runtime.InteropServices;
 
-namespace CarrotUnpacker.Core;
+namespace CFUnpacker.Core;
 
 internal sealed class TaskbarProgress : IDisposable
 {

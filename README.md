@@ -1,4 +1,4 @@
-# 保卫萝卜系列解包工具
+# CFUnpacker
 
 解包工具作者：熔萤FluorescentLava
 
@@ -17,7 +17,7 @@
 
 ## 使用
 
-1. 运行 `CarrotUnpacker.exe`。
+1. 运行 `CFUnpacker.exe`。
 2. 顶部默认选择“自动识别”；也可手动指定游戏。
 3. 选择或拖入 APK，再选择输出文件夹。
 4. 如需替换已存在的同名目录，打开“覆盖同名输出目录”。
@@ -59,11 +59,14 @@
 需要 Visual Studio 2022/Build Tools、.NET 10 SDK 和 Windows App SDK 工作负载。
 
 ```powershell
-dotnet restore CarrotUnpacker.csproj -r win-x64 -p:Platform=x64
-dotnet build CarrotUnpacker.csproj -c Release -p:Platform=x64 --no-restore
-dotnet publish CarrotUnpacker.csproj -c Release -r win-x64 --self-contained true `
-  -p:Platform=x64 -p:WindowsPackageType=None -p:WindowsAppSDKSelfContained=true
+dotnet restore CFUnpacker.csproj -r win-x64 -p:Platform=x64
+dotnet build CFUnpacker.csproj -c Release -p:Platform=x64 --no-restore
+.\Packaging\BuildRelease.ps1 -Configuration Release
 ```
+
+发布脚本会生成 `发布\CFUnpacker-win-x64.zip`。解压后根目录只包含
+`CFUnpacker.exe`、`.dll`、`.deps.json`、`.pri`、`.runtimeconfig.json`
+和 `runtime` 文件夹，其余运行依赖均位于 `runtime`。
 
 ## 微软参考
 
