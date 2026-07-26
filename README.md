@@ -67,12 +67,3 @@ dotnet build CFUnpacker.csproj -c Release -p:Platform=x64 --no-restore
 发布脚本会生成 `发布\CFUnpacker-win-x64.zip`。解压后根目录只包含
 `CFUnpacker.exe`、`.dll`、`.deps.json`、`.pri`、`.runtimeconfig.json`
 和 `runtime` 文件夹，其余运行依赖均位于 `runtime`。
-
-## 微软参考
-
-- [开始使用 WinUI](https://learn.microsoft.com/windows/apps/get-started/winui-get-started-overview)
-- [Windows App SDK 文件和文件夹选取器](https://learn.microsoft.com/windows/apps/develop/files/using-file-folder-pickers)
-- [拖放](https://learn.microsoft.com/windows/apps/design/input/drag-and-drop)
-- [进度控件](https://learn.microsoft.com/windows/apps/develop/ui/controls/progress-controls)
-- [排版](https://learn.microsoft.com/windows/apps/design/signature-experiences/typography)
-- [内容设计基础](https://learn.microsoft.com/windows/apps/design/basics/content-basics)
