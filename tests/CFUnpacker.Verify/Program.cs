@@ -1,5 +1,6 @@
-using System.Runtime.InteropServices;
 using System.IO.Compression;
+using System.Buffers.Binary;
+using System.Runtime.InteropServices;
 using CFUnpacker.Core;
 using CFUnpacker.Models;
 using SkiaSharp;
@@ -27,6 +28,12 @@ if (args.Contains("--bench-split", StringComparer.OrdinalIgnoreCase))
         ? parsedWorkers
         : Math.Clamp(Environment.ProcessorCount - 2, 1, 12);
     RunSplitBenchmark(seriesRoot, temporaryRoot, workerCount);
+    return;
+}
+
+VerifyPvrV3Bgr565ChannelOrder();
+if (args.Contains("--pvr-regression", StringComparer.OrdinalIgnoreCase))
+{
     return;
 }
 
@@ -133,6 +140,30 @@ static void CompareBitmaps(string expectedPath, string actualPath)
             $"straight expected={expectedStraight} actual={actualStraight}; " +
             $"bounds expected={boundsExpected} actual={boundsActual}");
     }
+}
+
+static void VerifyPvrV3Bgr565ChannelOrder()
+{
+    byte[] pvr = new byte[54];
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr, 0x03525650);
+    BinaryPrimitives.WriteUInt64LittleEndian(pvr.AsSpan(8), 0x0005060500626772UL);
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr.AsSpan(24), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr.AsSpan(28), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr.AsSpan(32), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr.AsSpan(36), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr.AsSpan(40), 1);
+    BinaryPrimitives.WriteUInt32LittleEndian(pvr.AsSpan(44), 1);
+    BinaryPrimitives.WriteUInt16LittleEndian(pvr.AsSpan(52), 0xF800);
+
+    using SKBitmap bitmap = PvrDecoder.Decode(pvr);
+    SKColor pixel = bitmap.GetPixel(0, 0);
+    if (pixel.Red != 255 || pixel.Green != 0 || pixel.Blue != 0 || pixel.Alpha != 255)
+    {
+        throw new Exception(
+            $"PVR v3 rgb/565 color regression: expected RGBA(255,0,0,255), actual {pixel}.");
+    }
+
+    Console.WriteLine("PASS PVR v3 BGR565 channel order");
 }
 
 static byte[] CopyPixels(SKBitmap bitmap)

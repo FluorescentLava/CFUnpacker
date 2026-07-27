@@ -123,28 +123,38 @@ internal static class PvrDecoder
         uint greenMask = 0;
         uint blueMask = 0;
         uint alphaMask = 0;
-        int shift = 0;
-        for (int i = 0; i < 4 && channelBits[i] > 0; i++)
+        if (IsAndroidBgr565(channelNames, channelBits))
         {
-            int widthInBits = channelBits[i];
-            uint mask = ((1u << widthInBits) - 1u) << shift;
-            switch ((char)channelNames[i])
+            // Carrot 3's Android map atlases identify BGR565 storage as rgb/565.
+            redMask = 0xF800;
+            greenMask = 0x07E0;
+            blueMask = 0x001F;
+        }
+        else
+        {
+            int shift = 0;
+            for (int i = 0; i < 4 && channelBits[i] > 0; i++)
             {
-                case 'r':
-                    redMask = mask;
-                    break;
-                case 'g':
-                    greenMask = mask;
-                    break;
-                case 'b':
-                    blueMask = mask;
-                    break;
-                case 'a':
-                    alphaMask = mask;
-                    break;
-            }
+                int widthInBits = channelBits[i];
+                uint mask = ((1u << widthInBits) - 1u) << shift;
+                switch ((char)channelNames[i])
+                {
+                    case 'r':
+                        redMask = mask;
+                        break;
+                    case 'g':
+                        greenMask = mask;
+                        break;
+                    case 'b':
+                        blueMask = mask;
+                        break;
+                    case 'a':
+                        alphaMask = mask;
+                        break;
+                }
 
-            shift += widthInBits;
+                shift += widthInBits;
+            }
         }
 
         byte[] rgba = DecodeMaskedPixels(
@@ -164,6 +174,18 @@ internal static class PvrDecoder
 
         return CreateBitmap(width, height, rgba);
     }
+
+    private static bool IsAndroidBgr565(ReadOnlySpan<byte> channelNames, ReadOnlySpan<byte> channelBits) =>
+        channelNames.Length == 4 &&
+        channelBits.Length == 4 &&
+        channelNames[0] == 'r' &&
+        channelNames[1] == 'g' &&
+        channelNames[2] == 'b' &&
+        channelNames[3] == 0 &&
+        channelBits[0] == 5 &&
+        channelBits[1] == 6 &&
+        channelBits[2] == 5 &&
+        channelBits[3] == 0;
 
     private static byte[] DecodeMaskedPixels(
         ReadOnlySpan<byte> pixels,
