@@ -33,15 +33,17 @@
                             HorizontalAlignment="Stretch" />
                     </StackPanel>
 
-                    <Button
+                    <Border
                         x:Name="ApkDropTarget"
                         Padding="12"
                         AllowDrop="True"
-                        Click="ApkDropTarget_Click"
+                        Background="{ThemeResource CardBackgroundFillColorDefaultBrush}"
+                        BorderBrush="{ThemeResource CardStrokeColorDefaultBrush}"
+                        BorderThickness="1"
+                        CornerRadius="8"
                         DragLeave="DropZone_DragLeave"
                         DragOver="DropZone_DragOver"
-                        Drop="DropZone_Drop"
-                        HorizontalContentAlignment="Stretch">
+                        Drop="DropZone_Drop">
                         <Grid ColumnSpacing="12">
                             <Grid.ColumnDefinitions>
                                 <ColumnDefinition Width="Auto" />
@@ -64,7 +66,7 @@
                                     Text="将 .apk 文件拖到此处" />
                             </StackPanel>
                         </Grid>
-                    </Button>
+                    </Border>
 
                     <StackPanel Spacing="6">
                         <TextBlock

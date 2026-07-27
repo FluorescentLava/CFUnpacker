@@ -65,4 +65,6 @@ dotnet build CFUnpacker.csproj -c Release -p:Platform=x64 --no-restore
 ```
 
 发布脚本会生成 `发布\CFUnpacker-win-x64.zip`。解压后根目录只包含
-`CFUnpacker.exe` 启动器和 `runtime` 文件夹；自包含应用及其全部运行依赖仅位于 `runtime`，不会复制到根目录。
+`CFUnpacker.exe`、`.dll`、`.deps.json`、`.pri`、`.runtimeconfig.json`
+和 `runtime` 文件夹；根目录启动文件不会在 `runtime` 内重复，其余运行依赖均位于 `runtime`。
+程序固定使用该目录内附带的 .NET 运行时，目标电脑无需另行安装 .NET Desktop Runtime。

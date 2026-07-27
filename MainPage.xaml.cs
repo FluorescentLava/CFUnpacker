@@ -50,21 +50,6 @@ public sealed partial class MainPage : Page
         }
     }
 
-    private async void ApkDropTarget_Click(object sender, RoutedEventArgs e)
-    {
-        var picker = new FileOpenPicker(App.MainWindow.AppWindow.Id)
-        {
-            CommitButtonText = "选择 APK",
-            SuggestedStartLocation = PickerLocationId.Downloads,
-        };
-        picker.FileTypeFilter.Add(".apk");
-        PickFileResult? result = await picker.PickSingleFileAsync();
-        if (result is not null)
-        {
-            SetApkPath(result.Path);
-        }
-    }
-
     private async Task<PickFolderResult?> PickFolderAsync(string commitButtonText, PickerLocationId location)
     {
         var picker = new FolderPicker(App.MainWindow.AppWindow.Id)
@@ -475,7 +460,6 @@ public sealed partial class MainPage : Page
         OutputPathTextBox.IsEnabled = !busy;
         BrowseInputFolderButton.IsEnabled = !busy;
         BrowseOutputButton.IsEnabled = !busy;
-        ApkDropTarget.IsEnabled = !busy;
         ApkDropTarget.AllowDrop = !busy;
         ShowLogButton.IsEnabled = !busy;
         StartButton.IsEnabled = !busy;
