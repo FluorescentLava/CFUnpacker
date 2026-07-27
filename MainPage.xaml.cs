@@ -3,7 +3,6 @@ using CFUnpacker.Core;
 using CFUnpacker.Models;
 using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Controls;
-using Microsoft.UI.Xaml.Media;
 using Microsoft.Windows.Storage.Pickers;
 using Windows.ApplicationModel.DataTransfer;
 using Windows.Storage;
@@ -51,6 +50,21 @@ public sealed partial class MainPage : Page
         }
     }
 
+    private async void ApkDropTarget_Click(object sender, RoutedEventArgs e)
+    {
+        var picker = new FileOpenPicker(App.MainWindow.AppWindow.Id)
+        {
+            CommitButtonText = "选择 APK",
+            SuggestedStartLocation = PickerLocationId.Downloads,
+        };
+        picker.FileTypeFilter.Add(".apk");
+        PickFileResult? result = await picker.PickSingleFileAsync();
+        if (result is not null)
+        {
+            SetApkPath(result.Path);
+        }
+    }
+
     private async Task<PickFolderResult?> PickFolderAsync(string commitButtonText, PickerLocationId location)
     {
         var picker = new FolderPicker(App.MainWindow.AppWindow.Id)
@@ -66,7 +80,6 @@ public sealed partial class MainPage : Page
         e.AcceptedOperation = DataPackageOperation.Copy;
         e.DragUIOverride.Caption = "使用此 APK";
         e.DragUIOverride.IsCaptionVisible = true;
-        ApkDropTarget.BorderBrush = (Brush)Application.Current.Resources["AccentFillColorDefaultBrush"];
         DropHintText.Text = "松开以选择 APK";
     }
 
@@ -462,6 +475,7 @@ public sealed partial class MainPage : Page
         OutputPathTextBox.IsEnabled = !busy;
         BrowseInputFolderButton.IsEnabled = !busy;
         BrowseOutputButton.IsEnabled = !busy;
+        ApkDropTarget.IsEnabled = !busy;
         ApkDropTarget.AllowDrop = !busy;
         ShowLogButton.IsEnabled = !busy;
         StartButton.IsEnabled = !busy;
@@ -526,7 +540,6 @@ public sealed partial class MainPage : Page
 
     private void ResetDropZone()
     {
-        ApkDropTarget.BorderBrush = (Brush)Application.Current.Resources["CardStrokeColorDefaultBrush"];
         DropHintText.Text = _apkPath is null
             ? "将 .apk 文件拖到此处"
             : $"已选择：{Path.GetFileName(_apkPath)}";

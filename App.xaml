@@ -25,11 +25,19 @@
                     <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#FF176235" />
                     <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#FF9DCCAE" />
                     <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FFFFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#99FFFFFF" />
                     <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#FF228B4B" />
                     <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="#FF176235" />
                     <SolidColorBrush x:Key="SystemControlHighlightAltListAccentLowBrush" Color="#33228B4B" />
                     <SolidColorBrush x:Key="SystemControlHighlightAltListAccentMediumBrush" Color="#66228B4B" />
                     <SolidColorBrush x:Key="SystemControlHighlightAltListAccentHighBrush" Color="#99228B4B" />
+                </ResourceDictionary>
+                <ResourceDictionary x:Key="Dark">
+                    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFFFF" />
+                    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#99FFFFFF" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>
