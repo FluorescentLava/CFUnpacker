@@ -10,34 +10,34 @@
                 <XamlControlsResources xmlns="using:Microsoft.UI.Xaml.Controls" />
                 <!-- Other merged dictionaries here -->
             </ResourceDictionary.MergedDictionaries>
-            <!-- Keep the WinUI surfaces intact, but make the product accent deterministic. -->
+
+            <!-- Keep native WinUI controls while making the product accent theme-independent. -->
+            <Color x:Key="SystemAccentColor">#FF228B4B</Color>
+            <Color x:Key="SystemAccentColorLight1">#FF319A5A</Color>
+            <Color x:Key="SystemAccentColorLight2">#FF228B4B</Color>
+            <Color x:Key="SystemAccentColorLight3">#FF176235</Color>
+            <Color x:Key="SystemAccentColorDark1">#FF1D7A41</Color>
+            <Color x:Key="SystemAccentColorDark2">#FF176235</Color>
+            <Color x:Key="SystemAccentColorDark3">#FF124C2B</Color>
+            <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FF228B4B" />
+            <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#FF1D7A41" />
+            <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#FF176235" />
+            <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#FF9DCCAE" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFFFF" />
+            <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#99FFFFFF" />
+            <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#FF228B4B" />
+            <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="#FF176235" />
+            <SolidColorBrush x:Key="SystemControlHighlightAltListAccentLowBrush" Color="#33228B4B" />
+            <SolidColorBrush x:Key="SystemControlHighlightAltListAccentMediumBrush" Color="#66228B4B" />
+            <SolidColorBrush x:Key="SystemControlHighlightAltListAccentHighBrush" Color="#99228B4B" />
+
             <ResourceDictionary.ThemeDictionaries>
                 <ResourceDictionary x:Key="Default">
-                    <Color x:Key="SystemAccentColor">#FF228B4B</Color>
-                    <Color x:Key="SystemAccentColorLight1">#FF319A5A</Color>
-                    <Color x:Key="SystemAccentColorLight2">#FF228B4B</Color>
-                    <Color x:Key="SystemAccentColorLight3">#FF176235</Color>
-                    <Color x:Key="SystemAccentColorDark1">#FF1D7A41</Color>
-                    <Color x:Key="SystemAccentColorDark2">#FF176235</Color>
-                    <Color x:Key="SystemAccentColorDark3">#FF124C2B</Color>
-                    <SolidColorBrush x:Key="AccentFillColorDefaultBrush" Color="#FF228B4B" />
-                    <SolidColorBrush x:Key="AccentFillColorSecondaryBrush" Color="#FF1D7A41" />
-                    <SolidColorBrush x:Key="AccentFillColorTertiaryBrush" Color="#FF176235" />
-                    <SolidColorBrush x:Key="AccentFillColorDisabledBrush" Color="#FF9DCCAE" />
-                    <SolidColorBrush x:Key="AccentTextFillColorPrimaryBrush" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#99FFFFFF" />
-                    <SolidColorBrush x:Key="SystemControlHighlightAccentBrush" Color="#FF228B4B" />
-                    <SolidColorBrush x:Key="SystemControlHighlightAltAccentBrush" Color="#FF176235" />
-                    <SolidColorBrush x:Key="SystemControlHighlightAltListAccentLowBrush" Color="#33228B4B" />
-                    <SolidColorBrush x:Key="SystemControlHighlightAltListAccentMediumBrush" Color="#66228B4B" />
-                    <SolidColorBrush x:Key="SystemControlHighlightAltListAccentHighBrush" Color="#99228B4B" />
+                    <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FFFFFFFF" />
                 </ResourceDictionary>
                 <ResourceDictionary x:Key="Dark">
-                    <SolidColorBrush x:Key="TextOnAccentFillColorPrimaryBrush" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="TextOnAccentFillColorSecondaryBrush" Color="#FFFFFFFF" />
-                    <SolidColorBrush x:Key="TextOnAccentFillColorDisabledBrush" Color="#99FFFFFF" />
+                    <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FF2C2C2C" />
                 </ResourceDictionary>
             </ResourceDictionary.ThemeDictionaries>
         </ResourceDictionary>

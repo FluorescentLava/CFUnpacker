@@ -30,7 +30,20 @@
                             Text="游戏版本" />
                         <ComboBox
                             x:Name="GameComboBox"
-                            HorizontalAlignment="Stretch" />
+                            HorizontalAlignment="Stretch">
+                            <ComboBox.Resources>
+                                <ResourceDictionary>
+                                    <ResourceDictionary.ThemeDictionaries>
+                                        <ResourceDictionary x:Key="Default">
+                                            <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FFFFFFFF" />
+                                        </ResourceDictionary>
+                                        <ResourceDictionary x:Key="Dark">
+                                            <SolidColorBrush x:Key="ComboBoxDropDownBackground" Color="#FF2C2C2C" />
+                                        </ResourceDictionary>
+                                    </ResourceDictionary.ThemeDictionaries>
+                                </ResourceDictionary>
+                            </ComboBox.Resources>
+                        </ComboBox>
                     </StackPanel>
 
                     <Border
@@ -164,8 +177,12 @@
                     Click="StartButton_Click"
                     Style="{StaticResource AccentButtonStyle}">
                     <StackPanel Orientation="Horizontal" Spacing="8">
-                        <SymbolIcon Symbol="Play" />
-                        <TextBlock Text="开始解包" />
+                        <SymbolIcon
+                            Foreground="#FFFFFFFF"
+                            Symbol="Play" />
+                        <TextBlock
+                            Foreground="#FFFFFFFF"
+                            Text="开始解包" />
                     </StackPanel>
                 </Button>
             </Grid>
