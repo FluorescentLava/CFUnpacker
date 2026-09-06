@@ -1,5 +1,6 @@
 using System.IO.Compression;
 using System.Buffers.Binary;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 using CFUnpacker.Core;
 using CFUnpacker.Models;
@@ -19,6 +20,37 @@ if (args.Length >= 2 &&
         $"DETECT profile={detection.Profile?.DisplayName ?? "未知"} | " +
         $"compatible={string.Join(',', detection.CompatibleKinds)} | " +
         $"elapsed={detection.Elapsed.TotalMilliseconds:F1}ms | {detection.Evidence}");
+    return;
+}
+
+if (args.Length >= 3 &&
+    string.Equals(args[0], "--unpack", StringComparison.OrdinalIgnoreCase))
+{
+    ApkGameDetection detection = await ApkGameDetector.DetectAsync(args[1]);
+    GameProfile profile = detection.Profile ?? GameProfile.For(GameKind.Carrot4);
+    var progress = new Progress<UnpackProgress>(update =>
+        Console.WriteLine($"[{update.Percent:F0}%] {update.Message}"));
+    var stopwatch = Stopwatch.StartNew();
+    try
+    {
+        UnpackResult result = await new ApkUnpacker().UnpackAsync(
+            new UnpackRequest(profile, args[1], args[2], OverwriteExisting: true),
+            progress,
+            CancellationToken.None);
+        Console.WriteLine(
+            $"UNPACK OK out={result.OutputPath} assets={result.AssetsExtracted} " +
+            $"plists={result.PlistsScanned} atlases={result.AtlasesDecoded} frames={result.FramesWritten} " +
+            $"skipped={result.SkippedItems} elapsed={stopwatch.Elapsed}");
+        foreach (string warning in result.Warnings.Take(12))
+        {
+            Console.WriteLine($"WARN {warning}");
+        }
+    }
+    catch (Exception exception)
+    {
+        Console.WriteLine($"UNPACK FAIL {exception.GetType().Name}: {exception.Message}");
+    }
+
     return;
 }
 

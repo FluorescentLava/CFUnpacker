@@ -2,6 +2,7 @@ using System.Collections.Concurrent;
 using System.Diagnostics;
 using System.IO.Compression;
 using System.Text;
+using System.Xml;
 using CFUnpacker.Models;
 
 namespace CFUnpacker.Core;
@@ -9,8 +10,9 @@ namespace CFUnpacker.Core;
 public sealed class ApkUnpacker
 {
     private const string AssetsPrefix = "assets/";
+    private const string OutputPngRootName = "Unpacked_PNG";
 
-    private sealed record AssetEntry(string Name, string OutputPath);
+    private sealed record AssetEntry(string Name, string OutputPath, int SourceIndex);
 
     public async Task<UnpackResult> UnpackAsync(
         UnpackRequest request,
@@ -20,7 +22,8 @@ public sealed class ApkUnpacker
         ValidateRequest(request);
         var stopwatch = Stopwatch.StartNew();
         var stats = new MutableUnpackStats();
-        string apkStem = Path.GetFileNameWithoutExtension(request.ApkPath);
+        // QQ 会把 .apk 重命名成 .apk.1，取输出目录名前先剥掉数字后缀。
+        string apkStem = Path.GetFileNameWithoutExtension(ApkBundle.TrimNumericSuffix(request.ApkPath));
         string outputParent = Path.GetFullPath(request.OutputParent);
         string finalPath = Path.Combine(outputParent, apkStem);
         string stagingPath = Path.Combine(outputParent, $".{apkStem}.unpacking-{Guid.NewGuid():N}");
@@ -37,8 +40,9 @@ public sealed class ApkUnpacker
         try
         {
             Directory.CreateDirectory(stagingPath);
+            using var bundle = ApkBundle.Resolve(request.ApkPath);
             await ExtractAssetsAsync(
-                request.ApkPath,
+                bundle,
                 stagingPath,
                 stats,
                 progress,
@@ -51,7 +55,7 @@ public sealed class ApkUnpacker
                 .ToArray();
             stats.PlistsScanned = plists.Length;
 
-            string pngRoot = Path.Combine(stagingPath, "Unpacked_PNG");
+            string pngRoot = Path.Combine(stagingPath, OutputPngRootName);
             Directory.CreateDirectory(pngRoot);
             await SplitAtlasesAsync(
                 plists,
@@ -60,6 +64,18 @@ public sealed class ApkUnpacker
                 request.Profile,
                 stats,
                 progress,
+                cancellationToken).ConfigureAwait(false);
+
+            cancellationToken.ThrowIfCancellationRequested();
+            progress?.Report(new UnpackProgress(
+                UnpackStage.Scanning,
+                94,
+                "正在解密独立加密图片…"));
+            await DecryptStandaloneWrappedFilesAsync(
+                stagingPath,
+                pngRoot,
+                request.Profile,
+                stats,
                 cancellationToken).ConfigureAwait(false);
 
             cancellationToken.ThrowIfCancellationRequested();
@@ -94,23 +110,39 @@ public sealed class ApkUnpacker
     }
 
     private static async Task ExtractAssetsAsync(
-        string apkPath,
+        ApkBundle bundle,
         string stagingPath,
         MutableUnpackStats stats,
         IProgress<UnpackProgress>? progress,
         CancellationToken cancellationToken)
     {
-        List<string> entryNames;
-        await using (FileStream apk = OpenApk(apkPath))
-        using (var archive = new ZipArchive(apk, ZipArchiveMode.Read, leaveOpen: false))
+        var entryNames = new List<(string Name, int SourceIndex)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         {
-            entryNames = archive.Entries
-                .Where(entry =>
-                    !string.IsNullOrEmpty(entry.Name) &&
-                    entry.FullName.StartsWith(AssetsPrefix, StringComparison.OrdinalIgnoreCase))
-                .Select(entry => entry.FullName)
-                .Distinct(StringComparer.Ordinal)
-                .ToList();
+            var opened = bundle.OpenArchives();
+            try
+            {
+                for (int sourceIndex = 0; sourceIndex < opened.Count; sourceIndex++)
+                {
+                    foreach (ZipArchiveEntry entry in opened[sourceIndex].Archive.Entries)
+                    {
+                        if (string.IsNullOrEmpty(entry.Name) ||
+                            !entry.FullName.StartsWith(AssetsPrefix, StringComparison.OrdinalIgnoreCase))
+                        {
+                            continue;
+                        }
+
+                        if (seen.Add(entry.FullName))
+                        {
+                            entryNames.Add((entry.FullName, sourceIndex));
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                DisposeOpened(opened);
+            }
         }
 
         if (entryNames.Count == 0)
@@ -119,9 +151,10 @@ public sealed class ApkUnpacker
         }
 
         List<AssetEntry> entries = entryNames
-            .Select(name => new AssetEntry(
-                name,
-                ResolveZipOutputPath(stagingPath, name[AssetsPrefix.Length..])))
+            .Select(item => new AssetEntry(
+                item.Name,
+                ResolveZipOutputPath(stagingPath, item.Name[AssetsPrefix.Length..]),
+                item.SourceIndex))
             .ToList();
         foreach (string directory in entries
                      .Select(entry => Path.GetDirectoryName(entry.OutputPath)!)
@@ -139,62 +172,214 @@ public sealed class ApkUnpacker
             workers[workerIndex] = Task.Run(
                 async () =>
                 {
-                    await using FileStream apk = OpenApk(apkPath);
-                    using var archive = new ZipArchive(apk, ZipArchiveMode.Read, leaveOpen: false);
-                    for (int index = capturedWorker; index < entries.Count; index += workerCount)
+                    var opened = bundle.OpenArchives();
+                    try
                     {
-                        cancellationToken.ThrowIfCancellationRequested();
-                        AssetEntry workItem = entries[index];
-                        string entryName = workItem.Name;
+                        // ZipArchive.GetEntry 是线性扫描，改用一次性建立的哈希表：O(E) 构建 + O(1) 查找。
+                        var entryMaps = opened
+                            .Select(source => source.Archive.Entries
+                                .Where(entry => entry.FullName.StartsWith(AssetsPrefix, StringComparison.OrdinalIgnoreCase))
+                                .ToDictionary(entry => entry.FullName, entry => entry, StringComparer.Ordinal))
+                            .ToList();
 
-                        try
+                        for (int index = capturedWorker; index < entries.Count; index += workerCount)
                         {
-                            ZipArchiveEntry? entry = archive.GetEntry(workItem.Name);
-                            if (entry is null)
+                            cancellationToken.ThrowIfCancellationRequested();
+                            AssetEntry workItem = entries[index];
+                            string entryName = workItem.Name;
+
+                            try
                             {
-                                throw new InvalidDataException("ZIP 条目不存在。");
+                                ZipArchiveEntry? entry = null;
+                                entryMaps[workItem.SourceIndex].TryGetValue(entryName, out entry);
+                                entry ??= FindEntryAnywhere(entryMaps, entryName);
+                                if (entry is null)
+                                {
+                                    throw new InvalidDataException("ZIP 条目不存在。");
+                                }
+
+                                await using Stream input = entry.Open();
+                                await using var output = new FileStream(
+                                    workItem.OutputPath,
+                                    new FileStreamOptions
+                                    {
+                                        Mode = FileMode.Create,
+                                        Access = FileAccess.Write,
+                                        Share = FileShare.None,
+                                        BufferSize = 256 * 1024,
+                                        Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
+                                    });
+                                await input.CopyToAsync(output, 256 * 1024, cancellationToken).ConfigureAwait(false);
+                                Interlocked.Increment(ref stats.AssetsExtracted);
+                            }
+                            catch (Exception exception) when (
+                                exception is InvalidDataException or IOException &&
+                                !cancellationToken.IsCancellationRequested)
+                            {
+                                TryDeleteFile(workItem.OutputPath);
+                                Interlocked.Increment(ref stats.SkippedItems);
+                                stats.Warnings.Enqueue($"跳过 APK 条目 {entryName}: {exception.Message}");
                             }
 
-                            await using Stream input = entry.Open();
-                            await using var output = new FileStream(
-                                workItem.OutputPath,
-                                new FileStreamOptions
-                                {
-                                    Mode = FileMode.Create,
-                                    Access = FileAccess.Write,
-                                    Share = FileShare.None,
-                                    BufferSize = 256 * 1024,
-                                    Options = FileOptions.Asynchronous | FileOptions.SequentialScan,
-                                });
-                            await input.CopyToAsync(output, 256 * 1024, cancellationToken).ConfigureAwait(false);
-                            Interlocked.Increment(ref stats.AssetsExtracted);
+                            int done = Interlocked.Increment(ref completed);
+                            if (done == entries.Count || done % 32 == 0)
+                            {
+                                double percent = 2 + 34d * done / entries.Count;
+                                progress?.Report(new UnpackProgress(
+                                    UnpackStage.Extracting,
+                                    percent,
+                                    $"正在提取资源 {done:N0} / {entries.Count:N0}",
+                                    done,
+                                    entries.Count));
+                            }
                         }
-                        catch (Exception exception) when (
-                            exception is InvalidDataException or IOException &&
-                            !cancellationToken.IsCancellationRequested)
-                        {
-                            TryDeleteFile(workItem.OutputPath);
-                            Interlocked.Increment(ref stats.SkippedItems);
-                            stats.Warnings.Enqueue($"跳过 APK 条目 {entryName}: {exception.Message}");
-                        }
-
-                        int done = Interlocked.Increment(ref completed);
-                        if (done == entries.Count || done % 32 == 0)
-                        {
-                            double percent = 2 + 34d * done / entries.Count;
-                            progress?.Report(new UnpackProgress(
-                                UnpackStage.Extracting,
-                                percent,
-                                $"正在提取资源 {done:N0} / {entries.Count:N0}",
-                                done,
-                                entries.Count));
-                        }
+                    }
+                    finally
+                    {
+                        DisposeOpened(opened);
                     }
                 },
                 cancellationToken);
         }
 
         await Task.WhenAll(workers).ConfigureAwait(false);
+    }
+
+    private static ZipArchiveEntry? FindEntryAnywhere(
+        IReadOnlyList<Dictionary<string, ZipArchiveEntry>> entryMaps,
+        string entryName)
+    {
+        foreach (Dictionary<string, ZipArchiveEntry> map in entryMaps)
+        {
+            if (map.TryGetValue(entryName, out ZipArchiveEntry? entry))
+            {
+                return entry;
+            }
+        }
+
+        return null;
+    }
+
+    private static void DisposeOpened(IReadOnlyList<(Stream OwnerStream, ZipArchive Archive)> opened)
+    {
+        foreach ((Stream ownerStream, ZipArchive archive) in opened)
+        {
+            archive.Dispose();
+            ownerStream.Dispose();
+        }
+    }
+
+    /// <summary>
+    /// 四代系 APK 里存在大量不进图集的独立 PNG，同样带 ff db ff ee 66 加密头，
+    /// 解包后留在输出里无法查看。这里在拆图之后把这类文件就地解密回真正的 PNG。
+    /// 只扫描原始 assets（跳过 Unpacked_PNG 输出目录），按 .png 扩展名过滤。
+    /// </summary>
+    private static async Task DecryptStandaloneWrappedFilesAsync(
+        string stagingPath,
+        string pngRoot,
+        GameProfile profile,
+        MutableUnpackStats stats,
+        CancellationToken cancellationToken)
+    {
+        var candidates = new List<string>();
+        foreach (string directory in Directory.EnumerateDirectories(stagingPath))
+        {
+            if (string.Equals(
+                    Path.GetFileName(directory),
+                    OutputPngRootName,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                continue;
+            }
+
+            candidates.AddRange(Directory.EnumerateFiles(directory, "*.png", SearchOption.AllDirectories));
+        }
+
+        candidates.AddRange(Directory.EnumerateFiles(stagingPath, "*.png", SearchOption.TopDirectoryOnly));
+        candidates.RemoveAll(file => !LooksWrapped(file));
+        if (candidates.Count == 0)
+        {
+            return;
+        }
+
+        var options = new ParallelOptions
+        {
+            CancellationToken = cancellationToken,
+            MaxDegreeOfParallelism = Math.Clamp(Environment.ProcessorCount - 2, 1, 12),
+        };
+
+        await Parallel.ForEachAsync(
+            candidates,
+            options,
+            (file, token) =>
+            {
+                try
+                {
+                    byte[] source = File.ReadAllBytes(file);
+                    foreach ((EncryptionKey key, int rounds) in WrappedKeyCandidates(profile))
+                    {
+                        if (!EncryptionCodec.TryDecodeCustom(source, key, rounds, out byte[] decoded, out _))
+                        {
+                            continue;
+                        }
+
+                        if (!decoded.AsSpan().StartsWith(new byte[] { 0x89, (byte)'P', (byte)'N', (byte)'G' }))
+                        {
+                            break;
+                        }
+
+                        File.WriteAllBytes(file, decoded);
+                        Interlocked.Increment(ref stats.DecryptedStandalonePngs);
+                        break;
+                    }
+                }
+                catch (Exception exception) when (
+                    exception is InvalidDataException or IOException)
+                {
+                    string relative = Path.GetRelativePath(stagingPath, file);
+                    stats.Warnings.Enqueue($"独立图片解密失败 {relative}: {exception.Message}");
+                }
+
+                return ValueTask.CompletedTask;
+            }).ConfigureAwait(false);
+    }
+
+    private static IEnumerable<(EncryptionKey Key, int Rounds)> WrappedKeyCandidates(GameProfile profile)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (profile.PlistKey is not null)
+        {
+            yield return (profile.PlistKey, profile.PlistKeyRounds);
+            seen.Add(profile.PlistKey.Name);
+        }
+
+        foreach (EncryptionKey key in GameProfile.WrapperKeys)
+        {
+            if (seen.Add(key.Name))
+            {
+                yield return (key, key.Rounds);
+            }
+        }
+    }
+
+    private static bool LooksWrapped(string file)
+    {
+        try
+        {
+            using var stream = new FileStream(file, FileMode.Open, FileAccess.Read, FileShare.Read, 5);
+            Span<byte> header = stackalloc byte[5];
+            int read = stream.Read(header);
+            return read == 5 &&
+                   header[0] == 0xFF &&
+                   header[1] == 0xDB &&
+                   header[2] == 0xFF &&
+                   header[3] == 0xEE &&
+                   header[4] == 0x66;
+        }
+        catch (IOException)
+        {
+            return false;
+        }
     }
 
     private static async Task SplitAtlasesAsync(
@@ -242,7 +427,7 @@ public sealed class ApkUnpacker
                     Interlocked.Increment(ref stats.SkippedItems);
                 }
                 catch (Exception exception) when (
-                    exception is InvalidDataException or IOException or NotSupportedException)
+                    exception is InvalidDataException or IOException or NotSupportedException or XmlException)
                 {
                     Interlocked.Increment(ref stats.SkippedItems);
                     string relative = Path.GetRelativePath(stagingPath, plist);
@@ -293,10 +478,11 @@ public sealed class ApkUnpacker
              - 输入 APK：`{request.ApkPath}`
              - 游戏类型：{request.Profile.DisplayName}
              - `CCZ!` 为未加密压缩资源，`CCZp` 使用对应 key 解密后进行 zlib 解压。
-             - 三代与阿波之旅的 `czzf` plist、四代的 `ff db ff ee 66` plist/PNG 会自动解密。
+             - 三代与阿波之旅的 `czzf` plist、四代（含国际版）的 `ff db ff ee 66` plist/PNG 会自动解密。
              - 自定义封装按“首尾各 512 个 32 位词连续、中段每 4 词处理 1 词”解密，并验证 header 中的长度与 CRC32。
              - RGBA4444 等 PVR v2 图像按 header 的通道 mask 解码，避免通道顺序造成偏色。
              - 拆分图位于 `Unpacked_PNG`；程序不输出整张 atlas PNG，也不会保留运行暂存目录。
+             - 不进图集的独立加密 PNG 会被就地解密为可直接查看的图片。
 
              ## key
 
@@ -313,6 +499,7 @@ public sealed class ApkUnpacker
              - 扫描 plist：{stats.PlistsScanned:N0}
              - 解出图集：{stats.AtlasesDecoded:N0}
              - 拆分 PNG：{stats.FramesWritten:N0}
+             - 就地解密独立 PNG：{stats.DecryptedStandalonePngs:N0}
              - 跳过项目：{stats.SkippedItems:N0}
              - 用时：{elapsed:hh\:mm\:ss}
 
@@ -327,6 +514,7 @@ public sealed class ApkUnpacker
         log.AppendLine($"plist_scanned={stats.PlistsScanned}");
         log.AppendLine($"atlas_written={stats.AtlasesDecoded}");
         log.AppendLine($"frames_written={stats.FramesWritten}");
+        log.AppendLine($"standalone_png_decrypted={stats.DecryptedStandalonePngs}");
         log.AppendLine($"skipped={stats.SkippedItems}");
         log.AppendLine($"elapsed={elapsed}");
         log.AppendLine();
@@ -394,21 +582,12 @@ public sealed class ApkUnpacker
         }
     }
 
-    private static FileStream OpenApk(string path) =>
-        new(
-            path,
-            FileMode.Open,
-            FileAccess.Read,
-            FileShare.Read,
-            256 * 1024,
-            FileOptions.Asynchronous | FileOptions.RandomAccess);
-
     private static string ResolveZipOutputPath(string stagingPath, string relativeName)
     {
-        string normalized = relativeName
-            .Replace('/', Path.DirectorySeparatorChar)
-            .Replace('\\', Path.DirectorySeparatorChar);
-        string fullPath = Path.GetFullPath(Path.Combine(stagingPath, normalized));
+        // 1.0.6 等版本的条目名里会出现 <、> 等 Windows 不允许的字符，
+        // 统一按百分号编码（< → %3C）落盘；plist 纹理查找使用同一消毒规则。
+        string sanitized = PathSanitizer.SanitizeRelativePath(relativeName);
+        string fullPath = Path.GetFullPath(Path.Combine(stagingPath, sanitized));
         string safeRoot = Path.GetFullPath(stagingPath) + Path.DirectorySeparatorChar;
         if (!fullPath.StartsWith(safeRoot, StringComparison.OrdinalIgnoreCase))
         {
@@ -425,9 +604,9 @@ public sealed class ApkUnpacker
             throw new FileNotFoundException("找不到 APK 文件。", request.ApkPath);
         }
 
-        if (!string.Equals(Path.GetExtension(request.ApkPath), ".apk", StringComparison.OrdinalIgnoreCase))
+        if (!ApkBundle.IsSupportedInput(request.ApkPath))
         {
-            throw new InvalidDataException("只能选择 .apk 文件。");
+            throw new InvalidDataException("只能选择 .apk / .apks / .xapk 文件（支持 QQ 重命名的 .apk.1 等）。");
         }
 
         if (string.IsNullOrWhiteSpace(request.OutputParent))

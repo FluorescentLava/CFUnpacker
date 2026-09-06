@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using CFUnpacker.Core;
 using CFUnpacker.Models;
 using Microsoft.UI.Xaml;
@@ -82,11 +82,10 @@ public sealed partial class MainPage : Page
         IReadOnlyList<IStorageItem> items = await e.DataView.GetStorageItemsAsync();
         StorageFile? apk = items
             .OfType<StorageFile>()
-            .FirstOrDefault(file =>
-                string.Equals(Path.GetExtension(file.Path), ".apk", StringComparison.OrdinalIgnoreCase));
+            .FirstOrDefault(file => ApkBundle.IsSupportedInput(file.Path));
         if (apk is null)
         {
-            ShowInputError("只能拖入一个 .apk 文件。");
+            ShowInputError("只能拖入一个 .apk / .apks / .xapk 文件（支持 QQ 重命名的 .apk.1 等）。");
             return;
         }
 
@@ -384,7 +383,8 @@ public sealed partial class MainPage : Page
         try
         {
             candidates = Directory
-                .EnumerateFiles(inputFolder, "*.apk", SearchOption.TopDirectoryOnly)
+                .EnumerateFiles(inputFolder, "*", SearchOption.TopDirectoryOnly)
+                .Where(ApkBundle.IsSupportedInput)
                 .Take(2)
                 .ToArray();
         }
@@ -402,7 +402,7 @@ public sealed partial class MainPage : Page
         }
 
         error = candidates.Length == 0
-            ? "输入文件夹中没有 .apk 文件。"
+            ? "输入文件夹中没有 APK 文件。"
             : "输入文件夹中有多个 APK，请拖入要解包的文件。";
         return false;
     }
@@ -418,7 +418,8 @@ public sealed partial class MainPage : Page
         try
         {
             string[] candidates = Directory
-                .EnumerateFiles(folder, "*.apk", SearchOption.TopDirectoryOnly)
+                .EnumerateFiles(folder, "*", SearchOption.TopDirectoryOnly)
+                .Where(ApkBundle.IsSupportedInput)
                 .Take(2)
                 .ToArray();
             if (candidates.Length == 1)
@@ -525,7 +526,7 @@ public sealed partial class MainPage : Page
     private void ResetDropZone()
     {
         DropHintText.Text = _apkPath is null
-            ? "将 .apk 文件拖到此处"
+            ? "将 .apk / .apks / .xapk 文件拖到此处（支持 .apk.1）"
             : $"已选择：{Path.GetFileName(_apkPath)}";
     }
 

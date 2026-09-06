@@ -100,14 +100,18 @@ internal static class AtlasSplitter
         var candidates = new List<string>();
         if (!string.IsNullOrWhiteSpace(textureFileName))
         {
-            string normalized = textureFileName
-                .Replace('/', Path.DirectorySeparatorChar)
-                .Replace('\\', Path.DirectorySeparatorChar);
+            // 提取到磁盘时文件名做过 Windows 非法字符消毒，这里用同一规则回查。
+            string normalized = PathSanitizer.SanitizeRelativePath(textureFileName);
             candidates.Add(Path.Combine(directory, normalized));
             if (normalized.EndsWith(".pvr", StringComparison.OrdinalIgnoreCase))
             {
                 candidates.Add(Path.Combine(directory, normalized + ".ccz"));
             }
+
+            string raw = textureFileName
+                .Replace('/', Path.DirectorySeparatorChar)
+                .Replace('\\', Path.DirectorySeparatorChar);
+            candidates.Add(Path.Combine(directory, raw));
         }
 
         string basePath = Path.Combine(directory, Path.GetFileNameWithoutExtension(plistPath));
@@ -336,10 +340,5 @@ internal static class AtlasSplitter
         return fullPath;
     }
 
-    private static string SanitizeSegment(string segment)
-    {
-        char[] invalid = Path.GetInvalidFileNameChars();
-        string sanitized = string.Concat(segment.Select(character => invalid.Contains(character) ? '_' : character));
-        return string.IsNullOrWhiteSpace(sanitized) ? "_" : sanitized;
-    }
+    private static string SanitizeSegment(string segment) => PathSanitizer.SanitizeSegment(segment);
 }

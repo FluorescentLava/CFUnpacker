@@ -39,6 +39,7 @@ internal sealed class MutableUnpackStats
     public int PlistsScanned;
     public int AtlasesDecoded;
     public int FramesWritten;
+    public int DecryptedStandalonePngs;
     public int SkippedItems;
     public readonly System.Collections.Concurrent.ConcurrentQueue<string> Warnings = new();
     public readonly System.Collections.Concurrent.ConcurrentDictionary<string, int> KeyUsage = new();

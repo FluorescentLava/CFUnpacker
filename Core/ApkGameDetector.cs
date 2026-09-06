@@ -31,35 +31,53 @@ internal static class ApkGameDetector
         CancellationToken cancellationToken = default)
     {
         var stopwatch = Stopwatch.StartNew();
-        using var apk = new FileStream(
-            apkPath,
-            new FileStreamOptions
+        using var bundle = ApkBundle.Resolve(apkPath);
+        var opened = bundle.OpenArchives();
+        try
+        {
+            List<ZipArchiveEntry> assets = opened
+                .SelectMany(source => source.Archive.Entries)
+                .Where(entry =>
+                    !string.IsNullOrEmpty(entry.Name) &&
+                    entry.FullName.StartsWith(AssetsPrefix, StringComparison.OrdinalIgnoreCase))
+                .ToList();
+            if (assets.Count == 0)
             {
-                Mode = FileMode.Open,
-                Access = FileAccess.Read,
-                Share = FileShare.Read,
-                BufferSize = 64 * 1024,
-                Options = FileOptions.RandomAccess,
-            });
-        using var archive = new ZipArchive(apk, ZipArchiveMode.Read, leaveOpen: false);
-        List<ZipArchiveEntry> assets = archive.Entries
-            .Where(entry =>
-                !string.IsNullOrEmpty(entry.Name) &&
-                entry.FullName.StartsWith(AssetsPrefix, StringComparison.OrdinalIgnoreCase))
-            .ToList();
-        if (assets.Count == 0)
-        {
-            return Unknown("APK 中没有 assets 资源目录。", stopwatch);
-        }
+                return Unknown("APK 中没有 assets 资源目录。", stopwatch);
+            }
 
-        cancellationToken.ThrowIfCancellationRequested();
-        (bool hasCzzf, bool hasCarrot4Wrapper) = FindWrappedResources(assets, cancellationToken);
-        if (hasCarrot4Wrapper)
+            cancellationToken.ThrowIfCancellationRequested();
+            return DetectFromAssets(assets, stopwatch, cancellationToken);
+        }
+        finally
         {
+            foreach ((Stream ownerStream, ZipArchive archive) in opened)
+            {
+                archive.Dispose();
+                ownerStream.Dispose();
+            }
+        }
+    }
+
+    private static ApkGameDetection DetectFromAssets(
+        IReadOnlyList<ZipArchiveEntry> assets,
+        Stopwatch stopwatch,
+        CancellationToken cancellationToken)
+    {
+        (bool hasCzzf, ZipArchiveEntry? wrappedSample) = FindWrappedResources(assets, cancellationToken);
+        if (wrappedSample is not null)
+        {
+            // 四代（含国际版）共用 ff db ff ee 66 封装与 key，用样本文件验证 key。
+            bool keyVerified = CanDecodeWrapped(
+                ReadEntry(wrappedSample),
+                GameProfile.For(GameKind.Carrot4).PlistKey!,
+                8);
             return Known(
                 GameKind.Carrot4,
                 [GameKind.Carrot4],
-                "检测到四代的 ff db ff ee 66 加密资源头。",
+                keyVerified
+                    ? "检测到四代的 ff db ff ee 66 加密资源头，样本通过四代 key 解密（国际版共用该 key）。"
+                    : "检测到四代的 ff db ff ee 66 加密资源头（样本 key 校验未通过，按四代处理）。",
                 stopwatch);
         }
 
@@ -84,10 +102,11 @@ internal static class ApkGameDetector
                 stopwatch);
         }
 
-        (bool carrot1Key, bool carrot2Key) = ProbeLegacyCczKeys(assets, cancellationToken);
+        Dictionary<GameKind, bool> cczMatches = ProbeLegacyCczKeys(assets, cancellationToken);
         int carrot1Score = ScoreCarrot1Layout(assets);
         int carrot2Score = ScoreCarrot2Layout(assets);
-        if (carrot1Key)
+        int carrot4Score = ScoreCarrot4Layout(assets);
+        if (cczMatches.GetValueOrDefault(GameKind.Carrot1))
         {
             return Known(
                 GameKind.Carrot1,
@@ -96,8 +115,46 @@ internal static class ApkGameDetector
                 stopwatch);
         }
 
-        if (carrot2Key || carrot1Score >= 3 || carrot2Score >= 3)
+        if (cczMatches.GetValueOrDefault(GameKind.Carrot2))
         {
+            return Known(
+                GameKind.Carrot2,
+                [GameKind.Carrot1, GameKind.Carrot2],
+                "CCZ 样本使用二代 key；一代部分版本也使用该 key，两个旧版流程均视为兼容。",
+                stopwatch);
+        }
+
+        // 四代 1.0.0 这类早期版本可能还没有 ff db ff ee 66 封装，
+        // 但 CCZp 已经使用三代/四代 key，这里直接按 key 归类。
+        if (cczMatches.GetValueOrDefault(GameKind.Carrot4))
+        {
+            return Known(
+                GameKind.Carrot4,
+                [GameKind.Carrot4, GameKind.Carrot3],
+                "CCZ 样本通过四代 key 解密并验证为 PVR。",
+                stopwatch);
+        }
+
+        if (cczMatches.GetValueOrDefault(GameKind.Carrot3))
+        {
+            return Known(
+                GameKind.Carrot3,
+                [GameKind.Carrot3, GameKind.AboAdventure],
+                "CCZ 样本通过三代 key 解密并验证为 PVR。",
+                stopwatch);
+        }
+
+        if (carrot1Score >= 3 || carrot2Score >= 3 || carrot4Score >= 3)
+        {
+            if (carrot4Score > carrot1Score && carrot4Score > carrot2Score)
+            {
+                return Known(
+                    GameKind.Carrot4,
+                    [GameKind.Carrot4],
+                    $"四代资源特征得分更高（{carrot4Score}:{carrot1Score}/{carrot2Score}），按四代流程处理。",
+                    stopwatch);
+            }
+
             if (carrot2Score > carrot1Score)
             {
                 return Known(
@@ -107,23 +164,11 @@ internal static class ApkGameDetector
                     stopwatch);
             }
 
-            if (carrot1Score > carrot2Score)
-            {
-                return Known(
-                    GameKind.Carrot1,
-                    [GameKind.Carrot1],
-                    $"一代资源特征得分更高（{carrot1Score}:{carrot2Score}），兼容 CCZ/PVR 校验通过。",
-                    stopwatch);
-            }
-
-            if (carrot2Key)
-            {
-                return Known(
-                    GameKind.Carrot2,
-                    [GameKind.Carrot1, GameKind.Carrot2],
-                    "CCZ 样本使用二代 key；一代部分版本也使用该 key，两个旧版流程均视为兼容。",
-                    stopwatch);
-            }
+            return Known(
+                GameKind.Carrot1,
+                [GameKind.Carrot1],
+                $"一代资源特征得分更高（{carrot1Score}:{carrot2Score}），兼容 CCZ/PVR 校验通过。",
+                stopwatch);
         }
 
         return Unknown(
@@ -131,21 +176,20 @@ internal static class ApkGameDetector
             stopwatch);
     }
 
-    private static (bool HasCzzf, bool HasCarrot4Wrapper) FindWrappedResources(
+    private static (bool HasCzzf, ZipArchiveEntry? WrappedSample) FindWrappedResources(
         IReadOnlyList<ZipArchiveEntry> assets,
         CancellationToken cancellationToken)
     {
         bool hasCzzf = false;
-        IEnumerable<ZipArchiveEntry> candidates = assets
-            .Where(entry =>
-                entry.Name.EndsWith(".plist", StringComparison.OrdinalIgnoreCase) ||
-                entry.Name.EndsWith(".png", StringComparison.OrdinalIgnoreCase))
-            .OrderBy(entry =>
-                entry.Name.EndsWith(".plist", StringComparison.OrdinalIgnoreCase) ? 0 : 1)
-            .ThenBy(entry => entry.Length)
-            .Take(64);
+        ZipArchiveEntry? smallestWrapped = null;
+        IEnumerable<ZipArchiveEntry> Sample(string extension, int limit) => assets
+            .Where(entry => entry.Name.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+            .OrderBy(entry => entry.Length)
+            .Take(limit);
+
+        // plist 和 PNG 分开采样：四代早期版本 plist 可能是明文，加密只在 PNG 上。
         Span<byte> header = stackalloc byte[5];
-        foreach (ZipArchiveEntry entry in candidates)
+        foreach (ZipArchiveEntry entry in Sample(".plist", 48).Concat(Sample(".png", 48)))
         {
             cancellationToken.ThrowIfCancellationRequested();
             header.Clear();
@@ -154,7 +198,12 @@ internal static class ApkGameDetector
             if (read >= Carrot4Header.Length &&
                 header.SequenceEqual(Carrot4Header))
             {
-                return (hasCzzf, true);
+                if (smallestWrapped is null || entry.Length < smallestWrapped.Length)
+                {
+                    smallestWrapped = entry;
+                }
+
+                continue;
             }
 
             if (read >= 4 && header[..4].SequenceEqual("czzf"u8))
@@ -163,17 +212,25 @@ internal static class ApkGameDetector
             }
         }
 
-        return (hasCzzf, false);
+        return (hasCzzf, smallestWrapped);
     }
 
-    private static (bool Carrot1Key, bool Carrot2Key) ProbeLegacyCczKeys(
+    private static bool CanDecodeWrapped(byte[] data, EncryptionKey key, int rounds) =>
+        EncryptionCodec.TryDecodeCustom(data, key, rounds, out _, out _);
+
+    private static Dictionary<GameKind, bool> ProbeLegacyCczKeys(
         IReadOnlyList<ZipArchiveEntry> assets,
         CancellationToken cancellationToken)
     {
-        EncryptionKey carrot1Key = GameProfile.For(GameKind.Carrot1).PvrKeys[0];
-        EncryptionKey carrot2Key = GameProfile.For(GameKind.Carrot2).PvrKeys[0];
-        bool carrot1Match = false;
-        bool carrot2Match = false;
+        var probes = new List<(GameKind Kind, EncryptionKey Key)>
+        {
+            (GameKind.Carrot1, GameProfile.For(GameKind.Carrot1).PvrKeys[0]),
+            (GameKind.Carrot2, GameProfile.For(GameKind.Carrot2).PvrKeys[0]),
+            (GameKind.Carrot4, GameProfile.For(GameKind.Carrot4).PvrKeys[0]),
+            (GameKind.Carrot3, GameProfile.For(GameKind.Carrot3).PvrKeys[0]),
+        };
+
+        var matches = new Dictionary<GameKind, bool>();
         IEnumerable<ZipArchiveEntry> candidates = assets
             .Where(entry =>
                 entry.Name.EndsWith(".pvr.ccz", StringComparison.OrdinalIgnoreCase) &&
@@ -189,15 +246,26 @@ internal static class ApkGameDetector
                 continue;
             }
 
-            carrot1Match |= CanDecodeCcz(data, carrot1Key);
-            carrot2Match |= CanDecodeCcz(data, carrot2Key);
-            if (carrot1Match || carrot2Match)
+            foreach ((GameKind kind, EncryptionKey key) in probes)
+            {
+                if (matches.GetValueOrDefault(kind))
+                {
+                    continue;
+                }
+
+                if (CanDecodeCcz(data, key))
+                {
+                    matches[kind] = true;
+                }
+            }
+
+            if (matches.ContainsValue(true))
             {
                 break;
             }
         }
 
-        return (carrot1Match, carrot2Match);
+        return matches;
     }
 
     private static bool CanDecodeCcz(byte[] data, EncryptionKey key)
@@ -232,13 +300,20 @@ internal static class ApkGameDetector
         return score;
     }
 
+    private static int ScoreCarrot4Layout(IReadOnlyList<ZipArchiveEntry> assets)
+    {
+        int score = 0;
+        score += HasPrefix(assets, "assets/res/") ? 3 : 0;
+        score += HasExtensionUnder(assets, "assets/res/", ".ExportJson") ? 2 : 0;
+        return score;
+    }
+
     private static bool HasEntry(IReadOnlyList<ZipArchiveEntry> entries, string fullName) =>
         entries.Any(entry =>
             string.Equals(entry.FullName, fullName, StringComparison.OrdinalIgnoreCase));
 
     private static bool HasPrefix(IReadOnlyList<ZipArchiveEntry> entries, string prefix) =>
-        entries.Any(entry =>
-            entry.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
+        entries.Any(entry => entry.FullName.StartsWith(prefix, StringComparison.OrdinalIgnoreCase));
 
     private static bool HasExtensionUnder(
         IReadOnlyList<ZipArchiveEntry> entries,
@@ -292,4 +367,5 @@ internal static class ApkGameDetector
         stopwatch.Stop();
         return new ApkGameDetection(null, [], evidence, stopwatch.Elapsed);
     }
+
 }

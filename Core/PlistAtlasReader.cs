@@ -90,7 +90,7 @@ internal static partial class PlistAtlasReader
     {
         if (LooksLikeXml(data))
         {
-            return (data, "明文 plist");
+            return (StripMergeConflictMarkers(data), "明文 plist");
         }
 
         bool isCzzf = data.AsSpan().StartsWith("czzf"u8);
@@ -104,10 +104,40 @@ internal static partial class PlistAtlasReader
                 out byte[] decoded,
                 out string transform))
         {
-            return (decoded, $"{profile.PlistKey.Name} ({transform})");
+            return (StripMergeConflictMarkers(decoded), $"{profile.PlistKey.Name} ({transform})");
         }
 
         throw new InvalidDataException("plist 解密失败，所选游戏与 APK 可能不匹配。");
+    }
+
+    /// <summary>
+    /// 保卫萝卜4 1.0.0 等版本的开发者把带 Git 合并冲突标记的 plist 直接打进了包里
+    /// （如 dollhouse_abo_huawei_clothes.plist 的 smartupdate 值），严格 XML 解析会失败。
+    /// 这里整行剥掉冲突标记：保留的两个版本值中，宽容的字典解析会自动跳过多余的一个。
+    /// </summary>
+    private static byte[] StripMergeConflictMarkers(byte[] data)
+    {
+        if (data.AsSpan().IndexOf("<<<<<<<"u8) < 0)
+        {
+            return data;
+        }
+
+        var builder = new StringBuilder(data.Length);
+        using var reader = new StringReader(Encoding.UTF8.GetString(data));
+        while (reader.ReadLine() is { } line)
+        {
+            string trimmed = line.TrimStart();
+            bool isMarker =
+                trimmed.StartsWith("<<<<<<<", StringComparison.Ordinal) ||
+                trimmed.StartsWith(">>>>>>>", StringComparison.Ordinal) ||
+                trimmed == "=======";
+            if (!isMarker)
+            {
+                builder.Append(line).Append('\n');
+            }
+        }
+
+        return Encoding.UTF8.GetBytes(builder.ToString());
     }
 
     private static Dictionary<string, object?> ParseRoot(byte[] xml)
