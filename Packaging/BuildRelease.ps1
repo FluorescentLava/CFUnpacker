@@ -10,7 +10,7 @@ $releaseParent = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
 } else {
     [IO.Path]::GetFullPath($OutputDirectory)
 }
-$releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseParent 'win-x64-rust'))
+$releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseParent 'win-x64'))
 $executable = Join-Path $projectRoot 'target\release\CFUnpacker.exe'
 
 function Assert-NativeExecutable {
@@ -143,7 +143,7 @@ try {
         }
     }
 
-    $zipPath = Join-Path $releaseParent 'CFUnpacker-win-x64-rust.zip'
+    $zipPath = Join-Path $releaseParent 'CFUnpacker-win-x64.zip'
     # Some crates publish license files with a pre-1980 source timestamp. ZIP's
     # DOS date format cannot represent that date; normalize copied notices only.
     $zipEpoch = [DateTime]::new(1980, 1, 1)
