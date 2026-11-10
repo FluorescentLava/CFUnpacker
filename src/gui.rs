@@ -33,17 +33,25 @@ use windows::{
     ApplicationModel::DataTransfer::{DataPackageOperation, StandardDataFormats},
     Foundation::{PropertyValue, TimeSpan, TypedEventHandler},
     Win32::{
-        Foundation::HWND,
-        System::Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree},
+        Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
+        System::{
+            Com::{CLSCTX_INPROC_SERVER, CoCreateInstance, CoTaskMemFree},
+            LibraryLoader::GetModuleHandleW,
+        },
         UI::{
+            HiDpi::{GetDpiForWindow, GetSystemMetricsForDpi},
             Shell::{
                 FOS_FORCEFILESYSTEM, FOS_PICKFOLDERS, FileOpenDialog, IFileOpenDialog,
                 ITaskbarList3, SIGDN_FILESYSPATH, TBPF_NOPROGRESS, TBPF_NORMAL, TaskbarList,
             },
-            WindowsAndMessaging::{MB_ICONERROR, MB_OK, MessageBoxW},
+            WindowsAndMessaging::{
+                HICON, ICON_BIG, ICON_SMALL, IMAGE_ICON, LoadImageW, MB_ICONERROR, MB_OK,
+                MessageBoxW, SM_CXICON, SM_CXSMICON, SM_CYICON, SM_CYSMICON, SendMessageW,
+                WM_SETICON,
+            },
         },
     },
-    core::{HSTRING, Interface, Result, w},
+    core::{HSTRING, Interface, Owned, PCWSTR, Result, w},
 };
 use windows_future::AsyncOperationCompletedHandler;
 
@@ -61,6 +69,39 @@ fn with_ui(action: impl FnOnce(&Ui) -> Result<()>) -> Result<()> {
 }
 fn h(value: impl AsRef<str>) -> HSTRING {
     HSTRING::from(value.as_ref())
+}
+
+fn set_embedded_window_icons(hwnd: HWND) -> Result<[Owned<HICON>; 2]> {
+    let instance = HINSTANCE(unsafe { GetModuleHandleW(None)? }.0);
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let load = |width, height| -> Result<Owned<HICON>> {
+        // build.rs embeds AppIcon.ico as icon resource 1.
+        unsafe {
+            Ok(Owned::new(HICON(
+                LoadImageW(
+                    Some(instance),
+                    PCWSTR(std::ptr::without_provenance(1)),
+                    IMAGE_ICON,
+                    GetSystemMetricsForDpi(width, dpi),
+                    GetSystemMetricsForDpi(height, dpi),
+                    Default::default(),
+                )?
+                .0,
+            )))
+        }
+    };
+    let icons = [load(SM_CXICON, SM_CYICON)?, load(SM_CXSMICON, SM_CYSMICON)?];
+    for (kind, icon) in [(ICON_BIG, &icons[0]), (ICON_SMALL, &icons[1])] {
+        unsafe {
+            SendMessageW(
+                hwnd,
+                WM_SETICON,
+                Some(WPARAM(kind as usize)),
+                Some(LPARAM((**icon).0 as isize)),
+            );
+        }
+    }
+    Ok(icons)
 }
 
 struct Pending {
@@ -88,6 +129,7 @@ struct Model {
 }
 struct Ui {
     window: Window,
+    _icons: [Owned<HICON>; 2],
     page: FrameworkElement,
     hwnd: HWND,
     game: ComboBox,
@@ -123,12 +165,6 @@ impl Ui {
         let window = Window::new()?;
         window.SetTitle(&h("CFUnpacker"))?;
         window.SetSystemBackdrop(&MicaBackdrop::new()?)?;
-        let assets = std::env::current_exe()?.parent().unwrap().join("Assets");
-        let assets = if assets.is_dir() {
-            assets
-        } else {
-            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Assets")
-        };
         let layout: FrameworkElement =
             XamlReader::Load(&h(include_str!("../ui/MainWindow.xaml")))?.cast()?;
         window.SetContent(&layout)?;
@@ -145,10 +181,7 @@ impl Ui {
             Width: 900,
             Height: 1024,
         })?;
-        let icon = assets.join("AppIcon.ico");
-        if icon.is_file() {
-            let _ = app_window.SetIcon(&h(icon.to_string_lossy()));
-        }
+        let icons = set_embedded_window_icons(hwnd)?;
         let timer = window.DispatcherQueue()?.CreateTimer()?;
         timer.SetInterval(TimeSpan { Duration: 500_000 })?;
         let taskbar: Option<ITaskbarList3> =
@@ -179,6 +212,7 @@ impl Ui {
             log_dialog: find(&page, "LogDialog")?,
             log_text: find(&page, "LogTextBox")?,
             window,
+            _icons: icons,
             page,
             hwnd,
             timer,

@@ -103,14 +103,9 @@ try {
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
     Copy-Item -LiteralPath $executable -Destination $releaseRoot
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseRoot
-    $assetsDirectory = Join-Path $releaseRoot 'Assets'
-    New-Item -ItemType Directory -Path $assetsDirectory -Force | Out-Null
-    foreach ($asset in @('AppIcon.ico', 'AppIcon.png', 'Square44x44Logo.targetsize-48_altform-lightunplated.png')) {
-        Copy-Item -LiteralPath (Join-Path $projectRoot "Assets\$asset") -Destination $assetsDirectory
-    }
     & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot -SkipLicenses | Out-Host
 
-    foreach ($forbidden in @('Licenses', 'runtime', 'CFUnpacker.dll', 'CFUnpacker.runtimeconfig.json', 'cfunpacker-core.exe', 'coreclr.dll', 'Microsoft.UI.Xaml.dll')) {
+    foreach ($forbidden in @('Assets', 'Licenses', 'runtime', 'CFUnpacker.dll', 'CFUnpacker.runtimeconfig.json', 'cfunpacker-core.exe', 'coreclr.dll', 'Microsoft.UI.Xaml.dll')) {
         if (Test-Path -LiteralPath (Join-Path $releaseRoot $forbidden)) {
             throw "Unexpected legacy/runtime file in the native release: $forbidden"
         }

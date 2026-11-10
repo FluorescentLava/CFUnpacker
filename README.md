@@ -1,4 +1,4 @@
-<p align="center"><img src="Assets/AppIcon.png" width="128" alt="CFUnpacker 图标" /></p>
+<p align="center"><img src="https://raw.githubusercontent.com/FluorescentLava/CFUnpacker/main/Assets/AppIcon.png" width="128" alt="CFUnpacker 图标" /></p>
 
 # CFUnpacker
 
@@ -23,7 +23,7 @@
 - 提取资源保留在输出根目录；独立加密 PNG 会在原资源路径替换为明文 PNG。`Unpacked_PNG` 仅包含图集拆分的最终 PNG，不生成整张 atlas PNG 或 `_atlases`、`_pvr` 中间目录。
 - Windows 不允许的文件名字符、末尾点和空格按 `%HH` 编码保留资源；编码后重名会报错，避免覆盖另一份资源。
 
-完整解压发行 ZIP，运行 CFUnpacker.exe，选择游戏、输入和输出位置，再点击“开始解包”。最终目录使用安装包主文件名，例如 `game.xapk.2` 输出到 `game`。请只处理自己合法持有并有权使用的安装包与资源。
+完整解压发行 ZIP，运行 CFUnpacker.exe，选择游戏、输入和输出位置，再点击“开始解包”。应用图标内嵌于 EXE，发行包无需 Assets 目录。最终目录使用安装包主文件名，例如 `game.xapk.2` 输出到 `game`。请只处理自己合法持有并有权使用的安装包与资源。
 
 ## 系统运行时
 
