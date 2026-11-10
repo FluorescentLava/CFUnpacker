@@ -82,8 +82,6 @@ cargo build --release --bin cfunpacker-core
 
 ```powershell
 cargo test --release --lib
-cargo build --release --bin cfunpacker-core
-python tests/integration.py
 ```
 
-Rust 单元测试覆盖解密、CRC/长度、像素格式、alpha、旋转、偏移、分包、路径规则和输入目录保护。端到端脚本仅使用 Python 3.11+ 标准库，自动生成小型安装包并验证识别、预期裁剪/旋转/留白像素、资源提取、覆盖与取消；所有输入和输出位于临时目录，结束后清理。
+Rust 单元测试覆盖解密、CRC/长度、像素格式、alpha、旋转、偏移、分包、路径规则和输入目录保护。

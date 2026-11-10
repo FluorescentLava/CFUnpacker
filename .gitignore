@@ -2,15 +2,13 @@
 /target/
 /artifacts/
 /发布/
-/publish/
 *.obj
 *.pdb
 
-# Generated artwork awaiting approval
-/output/imagegen/
+# Temporary artwork and tooling output
+/output/
 
 # Local tooling and logs
-__pycache__/
 .vs/
 .idea/
 *.log

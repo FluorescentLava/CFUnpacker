@@ -103,7 +103,7 @@ try {
     New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
     Copy-Item -LiteralPath $executable -Destination $releaseRoot
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseRoot
-    & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot -SkipLicenses | Out-Host
+    & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot | Out-Host
 
     foreach ($forbidden in @('Assets', 'Licenses', 'runtime', 'CFUnpacker.dll', 'CFUnpacker.runtimeconfig.json', 'cfunpacker-core.exe', 'coreclr.dll', 'Microsoft.UI.Xaml.dll')) {
         if (Test-Path -LiteralPath (Join-Path $releaseRoot $forbidden)) {
@@ -125,7 +125,6 @@ try {
         Directory = $releaseRoot
         Archive = $zipPath
     }
-    $summary | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $releaseParent 'package-sizes.json') -Encoding utf8
     $summary | Format-List
 }
 finally { Pop-Location }

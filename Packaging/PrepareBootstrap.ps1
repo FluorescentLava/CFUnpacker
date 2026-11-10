@@ -1,6 +1,5 @@
 param(
-    [string]$DestinationDirectory,
-    [switch]$SkipLicenses
+    [string]$DestinationDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -35,25 +34,15 @@ if ($actualHash -ne $expectedSha256) {
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-$entries = @{
-    'runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll' = (Join-Path $destination 'Microsoft.WindowsAppRuntime.Bootstrap.dll')
-}
-if (-not $SkipLicenses) {
-    $licenseDirectory = Join-Path $destination 'Licenses'
-    New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
-    $entries['license.txt'] = Join-Path $licenseDirectory 'Microsoft.WindowsAppSDK.Foundation.txt'
-}
+$bootstrapPath = Join-Path $destination 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
 $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
 try {
-    foreach ($entryName in $entries.Keys) {
-        $entry = $archive.GetEntry($entryName)
-        if ($null -eq $entry) { throw "Missing bootstrap package entry: $entryName" }
-        [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $entries[$entryName], $true)
-    }
+    $entry = $archive.GetEntry('runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll')
+    if ($null -eq $entry) { throw 'The bootstrap DLL is missing from the Microsoft package.' }
+    [IO.Compression.ZipFileExtensions]::ExtractToFile($entry, $bootstrapPath, $true)
 }
 finally { $archive.Dispose() }
 
-$bootstrapPath = Join-Path $destination 'Microsoft.WindowsAppRuntime.Bootstrap.dll'
 $signature = Get-AuthenticodeSignature -LiteralPath $bootstrapPath
 if ($signature.Status -ne 'Valid' -or $signature.SignerCertificate.Subject -notlike '*CN=Microsoft Corporation*') {
     throw "The bootstrap DLL does not have a valid Microsoft signature: $($signature.Status)"
