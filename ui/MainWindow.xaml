@@ -7,6 +7,22 @@
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
     Background="Transparent"
 >
+    <Page.Resources>
+        <Storyboard x:Key="ResultEntrance">
+            <DoubleAnimation
+                Storyboard.TargetName="ResultInfoBar"
+                Storyboard.TargetProperty="Opacity"
+                From="0" To="1" Duration="0:0:0.24" />
+            <DoubleAnimation
+                Storyboard.TargetName="ResultOffset"
+                Storyboard.TargetProperty="Y"
+                From="12" To="0" Duration="0:0:0.24">
+                <DoubleAnimation.EasingFunction>
+                    <CubicEase EasingMode="EaseOut" />
+                </DoubleAnimation.EasingFunction>
+            </DoubleAnimation>
+        </Storyboard>
+    </Page.Resources>
 
     <Grid>
         <Grid.RowDefinitions>
@@ -15,6 +31,7 @@
         </Grid.RowDefinitions>
 
         <ScrollViewer
+            x:Name="MainScrollViewer"
             Grid.Row="0"
             HorizontalContentAlignment="Stretch"
             HorizontalScrollBarVisibility="Disabled"
@@ -132,8 +149,13 @@
 
                     <InfoBar
                         x:Name="ResultInfoBar"
+                        Visibility="Collapsed"
                         IsClosable="True"
-                        IsOpen="False" />
+                        IsOpen="False">
+                        <InfoBar.RenderTransform>
+                            <TranslateTransform x:Name="ResultOffset" />
+                        </InfoBar.RenderTransform>
+                    </InfoBar>
                 </StackPanel>
             </Grid>
         </ScrollViewer>

@@ -14,13 +14,16 @@ use naui_winui3::{
     Microsoft::UI::{
         Dispatching::DispatcherQueueTimer,
         Xaml::{
-            self, Application, ApplicationInitializationCallback, Controls::*, DragEventHandler,
-            FrameworkElement, Markup::XamlReader, Media::MicaBackdrop, RoutedEventHandler, Window,
+            self, Application, ApplicationInitializationCallback, Controls::*, DragEventArgs,
+            DragEventHandler, DragOperationDeferral, FrameworkElement, Markup::XamlReader,
+            Media::MicaBackdrop, RoutedEventHandler, Visibility, Window,
         },
     },
 };
 use std::{
-    cell::RefCell,
+    cell::{Cell, RefCell},
+    collections::HashMap,
+    marker::PhantomData,
     path::{Path, PathBuf},
     rc::Rc,
     sync::{
@@ -32,6 +35,7 @@ use std::{
 use windows::{
     ApplicationModel::DataTransfer::{DataPackageOperation, StandardDataFormats},
     Foundation::{PropertyValue, TimeSpan, TypedEventHandler},
+    Storage::IStorageItem,
     Win32::{
         Foundation::{HINSTANCE, HWND, LPARAM, WPARAM},
         System::{
@@ -53,7 +57,43 @@ use windows::{
     },
     core::{HSTRING, Interface, Owned, PCWSTR, Result, w},
 };
-use windows_future::AsyncOperationCompletedHandler;
+use windows_collections::IVectorView;
+use windows_future::{AsyncOperationCompletedHandler, IAsyncOperation};
+
+// The dependency's generated projection omits Storyboard. This interface and
+// slot order come from Microsoft.UI.Xaml.winmd (IStoryboard, WinUI 2.3.0).
+windows_core::imp::define_interface!(
+    ResultStoryboard,
+    ResultStoryboardVtbl,
+    0x04d41bb3_8721_519e_8e53_fb8b34920305
+);
+
+#[repr(C)]
+pub struct ResultStoryboardVtbl {
+    base: windows_core::IInspectable_Vtbl,
+    children: usize,
+    seek: usize,
+    stop: unsafe extern "system" fn(*mut std::ffi::c_void) -> windows_core::HRESULT,
+    begin: unsafe extern "system" fn(*mut std::ffi::c_void) -> windows_core::HRESULT,
+    pause: usize,
+    resume: usize,
+    current_state: usize,
+    current_time: usize,
+    seek_aligned_to_last_tick: usize,
+    skip_to_fill: usize,
+}
+
+impl ResultStoryboard {
+    fn begin(&self) -> Result<()> {
+        // SAFETY: self owns a queried IStoryboard with the SDK's ABI above.
+        unsafe { (self.vtable().begin)(self.as_raw()).ok() }
+    }
+
+    fn stop(&self) -> Result<()> {
+        // SAFETY: self owns a queried IStoryboard with the SDK's ABI above.
+        unsafe { (self.vtable().stop)(self.as_raw()).ok() }
+    }
+}
 
 thread_local! {
     static UI: RefCell<Option<Rc<Ui>>> = const { RefCell::new(None) };
@@ -115,13 +155,50 @@ enum Event {
     Choice(i32, Pending, Option<Game>),
     Progress(Progress),
     Finished(std::result::Result<Stats, String>),
-    Dropped(PathBuf),
+    ProgressClosed,
+    DropReady(u64),
+}
+
+// WinUI deferrals belong to the UI apartment. Keep them here, never in an
+// async completion delegate, which WinRT may invoke on a worker thread.
+struct DropDeferral {
+    inner: Option<DragOperationDeferral>,
+    // The generated WinUI projection marks this type Send. Override that here
+    // so moving the deferral into a worker delegate is a compile-time error.
+    _apartment: PhantomData<Rc<()>>,
+}
+
+impl DropDeferral {
+    fn new(deferral: DragOperationDeferral) -> Self {
+        Self {
+            inner: Some(deferral),
+            _apartment: PhantomData,
+        }
+    }
+
+    fn complete(mut self) -> Result<()> {
+        self.inner.take().unwrap().Complete()
+    }
+}
+
+impl Drop for DropDeferral {
+    fn drop(&mut self) {
+        if let Some(deferral) = self.inner.take() {
+            let _ = deferral.Complete();
+        }
+    }
+}
+
+struct PendingDrop {
+    deferral: DropDeferral,
+    operation: IAsyncOperation<IVectorView<IStorageItem>>,
 }
 #[derive(Default)]
 struct Model {
     busy: bool,
     close_requested: bool,
     awaiting_choice: bool,
+    result_pending: bool,
     selected_apk: Option<PathBuf>,
     last_output: Option<PathBuf>,
     log: String,
@@ -144,6 +221,7 @@ struct Ui {
     drop_target: Border,
     drop_hint: TextBlock,
     result: InfoBar,
+    result_animation: ResultStoryboard,
     progress_dialog: ContentDialog,
     status: TextBlock,
     progress_bar: ProgressBar,
@@ -158,6 +236,8 @@ struct Ui {
     cancel: Arc<AtomicBool>,
     sender: Sender<Event>,
     receiver: RefCell<Receiver<Event>>,
+    pending_drops: RefCell<HashMap<u64, PendingDrop>>,
+    next_drop: Cell<u64>,
 }
 
 impl Ui {
@@ -179,7 +259,7 @@ impl Ui {
         let app_window = window.AppWindow()?;
         app_window.Resize(windows::Graphics::SizeInt32 {
             Width: 900,
-            Height: 1024,
+            Height: 1120,
         })?;
         let icons = set_embedded_window_icons(hwnd)?;
         let timer = window.DispatcherQueue()?.CreateTimer()?;
@@ -203,6 +283,10 @@ impl Ui {
             drop_target: find(&page, "ApkDropTarget")?,
             drop_hint: find(&page, "DropHintText")?,
             result: find(&page, "ResultInfoBar")?,
+            result_animation: page
+                .Resources()?
+                .Lookup(&PropertyValue::CreateString(&h("ResultEntrance"))?)?
+                .cast()?,
             progress_dialog: find(&page, "ProgressDialog")?,
             status: find(&page, "StatusTextBlock")?,
             progress_bar: find(&page, "UnpackProgressBar")?,
@@ -221,6 +305,8 @@ impl Ui {
             cancel: Arc::new(AtomicBool::new(false)),
             sender,
             receiver: RefCell::new(receiver),
+            pending_drops: RefCell::new(HashMap::new()),
+            next_drop: Cell::new(0),
         });
         UI.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&ui)));
         ui.wire_events()?;
@@ -268,6 +354,10 @@ impl Ui {
                 Ok(())
             })
         }))?;
+        self.result
+            .CloseButtonClick(&TypedEventHandler::new(|_, _| {
+                with_ui(|ui| ui.hide_result())
+            }))?;
         self.progress_dialog.Closing(&TypedEventHandler::<
             ContentDialog,
             ContentDialogClosingEventArgs,
@@ -296,39 +386,9 @@ impl Ui {
         self.drop_target
             .DragLeave(&DragEventHandler::new(|_, _| with_ui(|ui| ui.reset_drop())))?;
         self.drop_target.Drop(&DragEventHandler::new(|_, args| {
-            let args = args.as_ref().unwrap();
             with_ui(|ui| {
-                ui.reset_drop()?;
-                if ui.model.borrow().busy {
-                    return Ok(());
-                }
-                let data = args.DataView()?;
-                if !data.Contains(&StandardDataFormats::StorageItems()?)? {
-                    return ui.error("请拖入 .apk / .apks / .xapk 文件（支持 .apk.1）。");
-                }
-                let sender = ui.sender.clone();
-                let deferral = args.GetDeferral()?;
-                data.GetStorageItemsAsync()?
-                    .SetCompleted(&AsyncOperationCompletedHandler::<
-                        windows_collections::IVectorView<windows::Storage::IStorageItem>,
-                    >::new(move |operation, _| {
-                        if let Some(operation) = operation.as_ref()
-                            && let Ok(items) = operation.GetResults()
-                        {
-                            for item in items {
-                                if let Ok(path) = item.Path() {
-                                    let path = PathBuf::from(path.to_string());
-                                    if bundle::is_supported_input(&path) {
-                                        let _ = sender.send(Event::Dropped(path));
-                                        break;
-                                    }
-                                }
-                            }
-                        }
-                        deferral.Complete()?;
-                        Ok(())
-                    }))?;
-                Ok(())
+                let result = ui.begin_drop(args.as_ref().unwrap());
+                ui.report_drop_error(result)
             })
         }))?;
         self.timer
@@ -356,6 +416,75 @@ impl Ui {
     fn reset_drop(&self) -> Result<()> {
         self.drop_hint
             .SetText(&h("拖入 .apk / .apks / .xapk（支持 .apk.1）"))
+    }
+    fn begin_drop(&self, args: &DragEventArgs) -> Result<()> {
+        self.reset_drop()?;
+        if self.model.borrow().busy {
+            return Ok(());
+        }
+        let data = args.DataView()?;
+        if !data.Contains(&StandardDataFormats::StorageItems()?)? {
+            return self.error("请拖入 .apk / .apks / .xapk 文件（支持 .apk.1）。");
+        }
+        let deferral = DropDeferral::new(args.GetDeferral()?);
+        let operation = data.GetStorageItemsAsync()?;
+        let id = self.next_drop.get();
+        self.next_drop.set(id.wrapping_add(1));
+        self.pending_drops.borrow_mut().insert(
+            id,
+            PendingDrop {
+                deferral,
+                operation: operation.clone(),
+            },
+        );
+        let sender = self.sender.clone();
+        let result = operation.SetCompleted(&AsyncOperationCompletedHandler::new(move |_, _| {
+            // Only send a notification here. Both GetResults and Complete run
+            // on the UI thread when its dispatcher timer drains the channel.
+            let _ = sender.send(Event::DropReady(id));
+            Ok(())
+        }));
+        if result.is_err() {
+            self.pending_drops.borrow_mut().remove(&id);
+        }
+        result
+    }
+    fn finish_drop(&self, id: u64) -> Result<()> {
+        let pending = self.pending_drops.borrow_mut().remove(&id);
+        let Some(pending) = pending else {
+            return Ok(());
+        };
+        let items = pending.operation.GetResults();
+        pending.deferral.complete()?;
+        let items = items?;
+        if self.model.borrow().busy {
+            return Ok(());
+        }
+        for item in items {
+            let path = PathBuf::from(item.Path()?.to_string());
+            if path.is_file() && bundle::is_supported_input(&path) {
+                self.input
+                    .SetText(&h(path.parent().unwrap_or(Path::new("")).to_string_lossy()))?;
+                self.drop_hint
+                    .SetText(&h(path.file_name().unwrap_or_default().to_string_lossy()))?;
+                if self.output.Text()?.is_empty() {
+                    self.output.SetText(&self.input.Text()?)?;
+                }
+                self.model.borrow_mut().selected_apk = Some(path);
+                return Ok(());
+            }
+        }
+        self.error("请拖入 .apk / .apks / .xapk 文件（支持 .apk.1）。")
+    }
+    fn report_drop_error(&self, result: Result<()>) -> Result<()> {
+        match result {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let message = format!("无法读取拖入的文件：{error}");
+                self.log(&message);
+                self.error(&message)
+            }
+        }
     }
     fn pick_folder(&self) -> Result<Option<PathBuf>> {
         unsafe {
@@ -396,7 +525,21 @@ impl Ui {
         self.result.SetSeverity(InfoBarSeverity::Error)?;
         self.result.SetTitle(&h("无法开始解包"))?;
         self.result.SetMessage(&h(message))?;
-        self.result.SetIsOpen(true)
+        self.show_result()
+    }
+    fn hide_result(&self) -> Result<()> {
+        self.model.borrow_mut().result_pending = false;
+        self.result.SetIsOpen(false)?;
+        self.result.SetVisibility(Visibility::Collapsed)?;
+        self.result_animation.stop()
+    }
+    fn show_result(&self) -> Result<()> {
+        self.result_animation.stop()?;
+        self.result.SetOpacity(0.0)?;
+        self.result.SetIsOpen(true)?;
+        self.result.SetVisibility(Visibility::Visible)?;
+        self.result.UpdateLayout()?;
+        self.result_animation.begin()
     }
     fn log(&self, message: &str) {
         let mut model = self.model.borrow_mut();
@@ -467,7 +610,7 @@ impl Ui {
             selected,
             overwrite,
         };
-        self.result.SetIsOpen(false)?;
+        self.hide_result()?;
         self.open_output.SetIsEnabled(false)?;
         {
             let mut model = self.model.borrow_mut();
@@ -566,7 +709,13 @@ impl Ui {
         self.status.SetText(&h("正在准备…"))?;
         self.progress_bar.SetValue(0.0)?;
         self.percent.SetText(&h("0%"))?;
-        self.progress_dialog.ShowAsync()?;
+        let closed_sender = self.sender.clone();
+        self.progress_dialog
+            .ShowAsync()?
+            .SetCompleted(&AsyncOperationCompletedHandler::new(move |_, _| {
+                let _ = closed_sender.send(Event::ProgressClosed);
+                Ok(())
+            }))?;
         let sender = self.sender.clone();
         let cancel = Arc::clone(&self.cancel);
         self.log(&format!("按“{}”解包。", game.display_name()));
@@ -628,19 +777,14 @@ impl Ui {
                     }
                 }
                 Event::Finished(result) => self.finished(result)?,
-                Event::Dropped(path) => {
-                    if !self.model.borrow().busy {
-                        self.input.SetText(&h(path
-                            .parent()
-                            .unwrap_or(Path::new(""))
-                            .to_string_lossy()))?;
-                        self.drop_hint
-                            .SetText(&h(path.file_name().unwrap_or_default().to_string_lossy()))?;
-                        if self.output.Text()?.is_empty() {
-                            self.output.SetText(&self.input.Text()?)?;
-                        }
-                        self.model.borrow_mut().selected_apk = Some(path);
+                Event::ProgressClosed => {
+                    if self.model.borrow().result_pending {
+                        self.model.borrow_mut().result_pending = false;
+                        self.show_result()?;
                     }
+                }
+                Event::DropReady(id) => {
+                    self.report_drop_error(self.finish_drop(id))?;
                 }
             }
         }
@@ -648,15 +792,14 @@ impl Ui {
     }
     fn finished(&self, result: std::result::Result<Stats, String>) -> Result<()> {
         self.set_busy(false)?;
-        self.progress_dialog.Hide()?;
         match result {
             Ok(stats) => {
                 self.result.SetSeverity(InfoBarSeverity::Success)?;
-                self.result.SetTitle(&h("解包完成"))?;
-                self.result.SetMessage(&h(format!(
-                    "输出 {} 张拆分 PNG，解密 {} 张独立 PNG，用时 {:.2} 秒。",
-                    stats.frames_written, stats.decrypted_standalone_pngs, stats.elapsed_seconds
+                self.result.SetTitle(&h(format!(
+                    "解包完成，用时 {:.2} 秒",
+                    stats.elapsed_seconds
                 )))?;
+                self.result.SetMessage(&HSTRING::new())?;
                 self.log(&format!(
                     "完成：提取 {} 个资源，拆分 {} 个图集，就地解密 {} 张独立 PNG，跳过 {} 项。",
                     stats.assets_extracted,
@@ -684,7 +827,10 @@ impl Ui {
                 self.log(&error);
             }
         }
-        self.result.SetIsOpen(true)?;
+        // Let the modal finish its native closing animation before the result
+        // enters; otherwise the dialog covers most of the entrance transition.
+        self.model.borrow_mut().result_pending = true;
+        self.progress_dialog.Hide()?;
         self.maybe_close()
     }
     fn maybe_close(&self) -> Result<()> {

@@ -8,7 +8,7 @@ use anyhow::{Context, Result, bail, ensure};
 use rayon::prelude::*;
 use serde::Serialize;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     fs::{self, File},
     io::{Read, Write},
     path::{Path, PathBuf},
@@ -144,6 +144,7 @@ fn extract(
 ) -> Result<usize> {
     let mut entries = Vec::new();
     let mut seen = HashMap::new();
+    let mut directories = HashSet::new();
     let mut total_size = 0_u64;
     for (source_index, mut zip) in bundle.open_archives()?.into_iter().enumerate() {
         for index in 0..zip.len() {
@@ -197,7 +198,10 @@ fn extract(
             }
             seen.insert(identity, (name[7..].to_owned(), source_index));
             let path = root.join(relative);
-            fs::create_dir_all(path.parent().context("资源父目录无效")?)?;
+            let directory = path.parent().context("资源父目录无效")?;
+            if directories.insert(directory.to_owned()) {
+                fs::create_dir_all(directory)?;
+            }
             entries.push((source_index, index, path));
         }
     }
@@ -365,14 +369,7 @@ fn decrypt_standalone_pngs(
         {
             continue;
         }
-        let mut header = [0; 5];
-        let mut file = File::open(entry.path())?;
-        let read = file.read(&mut header)?;
-        if (read >= 4 && header[..4] == *b"czzf")
-            || (read == 5 && header == [0xff, 0xdb, 0xff, 0xee, 0x66])
-        {
-            candidates.push(entry.into_path());
-        }
+        candidates.push(entry.into_path());
     }
     if candidates.is_empty() {
         return Ok(());
@@ -386,8 +383,18 @@ fn decrypt_standalone_pngs(
     pool.install(|| {
         candidates.par_iter().try_for_each(|path| -> Result<()> {
             check_cancel(cancel)?;
+            let mut header = [0; 5];
+            let mut file = File::open(path)?;
+            let read = file.read(&mut header)?;
+            if !((read >= 4 && header[..4] == *b"czzf")
+                || (read == 5 && header == [0xff, 0xdb, 0xff, 0xee, 0x66]))
+            {
+                return Ok(());
+            }
             let result = (|| -> Result<()> {
-                let source = fs::read(path)?;
+                let mut source = header[..read].to_vec();
+                file.read_to_end(&mut source)?;
+                drop(file);
                 for (key, rounds) in &keys {
                     check_cancel(cancel)?;
                     if let Ok(decoded) = codec::decode_custom(&source, key, *rounds) {

@@ -345,6 +345,7 @@ pub fn split(
     let mut directories = HashSet::new();
     directories.insert(folder.clone());
     let mut buffer = Vec::new();
+    let mut encoder = PngEncoder::new();
     let mut paths = HashSet::new();
     for frame in &definition.frames {
         ensure!(!cancel.load(Ordering::Relaxed), "操作已取消");
@@ -360,7 +361,7 @@ pub fn split(
         if directories.insert(parent.to_path_buf()) {
             fs::create_dir_all(parent)?;
         }
-        write_png(&path, width, height, &buffer)?;
+        encoder.write(&path, width, height, &buffer)?;
     }
     Ok(definition.frames.len())
 }
@@ -567,43 +568,101 @@ pub fn render_frame(
 }
 
 pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
-    ensure!(
-        rgba.len() == image_byte_count(width, height)?,
-        "RGBA 像素长度与图像尺寸不匹配"
-    );
-    let mut output = BufWriter::with_capacity(16 * 1024, File::create(path)?);
-    output.write_all(PNG_SIGNATURE)?;
-    let mut header = [0_u8; 13];
-    header[..4].copy_from_slice(&width.to_be_bytes());
-    header[4..8].copy_from_slice(&height.to_be_bytes());
-    header[8] = 8; // Eight bits per channel, straight RGBA.
-    header[9] = 6;
-    write_png_chunk(&mut output, b"IHDR", &header)?;
+    PngEncoder::new().write(path, width, height, rgba)
+}
 
-    // The PNG crate's Fast encoder uses fdeflate, whose limited match strategy
-    // makes these sprites considerably larger. Match the old zlib fast path,
-    // retaining filter zero and batching scanlines without a whole-frame copy.
-    let row_bytes = width as usize * 4;
-    let scanline_bytes = row_bytes + 1;
-    let rows_per_batch = (256 * 1024 / scanline_bytes).max(1).min(height as usize);
-    let mut scanlines = vec![0_u8; scanline_bytes * rows_per_batch];
-    let idat = PngIdatWriter {
-        output: &mut output,
-        pending: Vec::with_capacity(64 * 1024),
-    };
-    let mut zlib = flate2::write::ZlibEncoder::new(idat, flate2::Compression::fast());
-    for source in rgba.chunks(row_bytes * rows_per_batch) {
-        for (row, pixels) in source.chunks_exact(row_bytes).enumerate() {
-            let start = row * scanline_bytes;
-            scanlines[start] = 0;
-            scanlines[start + 1..start + scanline_bytes].copy_from_slice(pixels);
+// Keep the compressor's dictionary and buffers between frames in an atlas.
+// Resetting its stream preserves allocations without carrying data across PNGs.
+struct PngEncoder {
+    compressor: flate2::Compress,
+    scanlines: Vec<u8>,
+    compressed: Vec<u8>,
+    idat: Vec<u8>,
+}
+
+impl PngEncoder {
+    fn new() -> Self {
+        Self {
+            compressor: flate2::Compress::new(flate2::Compression::fast(), true),
+            scanlines: Vec::new(),
+            compressed: vec![0; 64 * 1024],
+            idat: Vec::with_capacity(64 * 1024),
         }
-        zlib.write_all(&scanlines[..source.len() + source.len() / row_bytes])?;
     }
-    zlib.finish()?.complete()?;
-    write_png_chunk(&mut output, b"IEND", &[])?;
-    output.flush()?;
-    Ok(())
+
+    fn write(&mut self, path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()> {
+        ensure!(
+            rgba.len() == image_byte_count(width, height)?,
+            "RGBA 像素长度与图像尺寸不匹配"
+        );
+        let mut output = BufWriter::with_capacity(16 * 1024, File::create(path)?);
+        output.write_all(PNG_SIGNATURE)?;
+        let mut header = [0_u8; 13];
+        header[..4].copy_from_slice(&width.to_be_bytes());
+        header[4..8].copy_from_slice(&height.to_be_bytes());
+        header[8] = 8;
+        header[9] = 6; // Eight-bit straight RGBA, preserving transparent RGB.
+        write_png_chunk(&mut output, b"IHDR", &header)?;
+
+        let row_bytes = width as usize * 4;
+        let scanline_bytes = row_bytes + 1;
+        let rows_per_batch = (256 * 1024 / scanline_bytes).max(1).min(height as usize);
+        self.scanlines.resize(scanline_bytes * rows_per_batch, 0);
+        self.compressor.reset();
+        let mut idat = PngIdatWriter {
+            output: &mut output,
+            pending: std::mem::take(&mut self.idat),
+        };
+        for source in rgba.chunks(row_bytes * rows_per_batch) {
+            for (row, pixels) in source.chunks_exact(row_bytes).enumerate() {
+                let start = row * scanline_bytes;
+                self.scanlines[start] = 0;
+                self.scanlines[start + 1..start + scanline_bytes].copy_from_slice(pixels);
+            }
+            compress_png(
+                &mut self.compressor,
+                &self.scanlines[..source.len() + source.len() / row_bytes],
+                &mut self.compressed,
+                &mut idat,
+                flate2::FlushCompress::None,
+            )?;
+        }
+        compress_png(
+            &mut self.compressor,
+            &[],
+            &mut self.compressed,
+            &mut idat,
+            flate2::FlushCompress::Finish,
+        )?;
+        self.idat = idat.complete()?;
+        write_png_chunk(&mut output, b"IEND", &[])?;
+        output.flush()?;
+        Ok(())
+    }
+}
+
+fn compress_png(
+    compressor: &mut flate2::Compress,
+    mut source: &[u8],
+    buffer: &mut [u8],
+    output: &mut impl Write,
+    flush: flate2::FlushCompress,
+) -> Result<()> {
+    loop {
+        let before_in = compressor.total_in();
+        let before_out = compressor.total_out();
+        let status = compressor.compress(source, buffer, flush)?;
+        let consumed = (compressor.total_in() - before_in) as usize;
+        let written = (compressor.total_out() - before_out) as usize;
+        output.write_all(&buffer[..written])?;
+        source = &source[consumed..];
+        if status == flate2::Status::StreamEnd
+            || (source.is_empty() && written < buffer.len() && flush == flate2::FlushCompress::None)
+        {
+            return Ok(());
+        }
+        ensure!(consumed > 0 || written > 0, "PNG 压缩未能继续");
+    }
 }
 
 fn write_png_chunk(output: &mut impl Write, kind: &[u8; 4], payload: &[u8]) -> io::Result<()> {
@@ -622,8 +681,9 @@ struct PngIdatWriter<'a, W: Write> {
 }
 
 impl<W: Write> PngIdatWriter<'_, W> {
-    fn complete(mut self) -> io::Result<()> {
-        self.flush()
+    fn complete(mut self) -> io::Result<Vec<u8>> {
+        self.flush()?;
+        Ok(self.pending)
     }
 }
 
@@ -661,6 +721,26 @@ fn safe_output_path(root: &Path, name: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_encoder_resets_between_different_frame_sizes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("frame.png");
+        let mut encoder = PngEncoder::new();
+        let mut state = 0x91A2_3456_u32;
+        for (width, height) in [(513, 700), (1, 1), (3, 90), (1024, 80)] {
+            let pixels: Vec<u8> = (0..width * height * 4)
+                .map(|_| {
+                    state = state.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+                    (state >> 24) as u8
+                })
+                .collect();
+            encoder.write(&path, width, height, &pixels).unwrap();
+            let decoded = decode_png(&fs::read(&path).unwrap()).unwrap();
+            assert_eq!((decoded.width, decoded.height), (width, height));
+            assert_eq!(decoded.pixels, pixels);
+        }
+    }
 
     #[test]
     fn png_round_trip_crosses_scanline_batches_and_idat_chunks() {
