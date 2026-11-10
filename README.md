@@ -2,30 +2,38 @@
 
 解包工具作者：熔萤FluorescentLava
 
-本工具的格式分析、key 验证、算法整理、WinUI 3 程序实现与测试借助了 AI 工具。
+使用 **Rust + 原生 WinUI 3** 实现的保卫萝卜系列 APK 解包工具。界面通过 WinRT 投影直接调用 WinUI 3，解包核心直接链接进 GUI；正式程序没有 C#、.NET 或解包子进程。
 
-## 功能
+本工具的格式分析、key 验证、算法整理、程序实现与测试借助了 AI 工具。
 
-- 解包对象：保卫萝卜、保卫萝卜2、保卫萝卜3、保卫萝卜4（含国际版 Carrot Fantasy）、保卫萝卜阿波之旅。
-- 默认使用“自动识别”，按资源加密头、可验证 key 和目录特征选择流程，不依赖 APK 版本号。
-- 手动选择与识别结果不一致时，会询问切换到识别版本、按当前版本强制执行或取消。
-- 输入接受 `.apk`，以及 Google Play 分包格式 `.apks` / `.xapk`（自动合并 base 与 assets split 的资源，跳过 split_config）；QQ 重命名的 `.apk.1` 等数字后缀会自动识别并剥掉；可输入地址、使用文件选择器或直接拖入，拖入后会自动填写地址。
-- 输出位置可输入或选择。最终目录名与 APK 文件名一致。
-- 支持 CCZ/PVR、明文 plist、三代/阿波之旅 `czzf` plist、四代 `ff db ff ee 66` plist 和加密 PNG atlas。
-- `Unpacked_PNG` 只保存按 plist 拆出的最终 PNG，不生成或保留整张 atlas PNG、`_atlases`、`_pvr` 等中间结果。
-- APK 条目名含 `<`、`>` 等 Windows 非法字符时（如保卫萝卜4 1.0.6）自动按百分号编码（`<` → `%3C`）落盘，plist 纹理查找使用同一规则。
-- 四代系不进图集的独立加密 PNG（ff db ff ee 66）会在解包时就地解密为可直接查看的图片。
-- 取消、失败和成功后都会清理 `.unpacking-*` 暂存目录；覆盖模式完成后会删除替换用备份目录。
+## 功能与使用
 
-## 使用
+- 支持保卫萝卜、保卫萝卜2、保卫萝卜3、保卫萝卜4（含国际版 Carrot Fantasy）、保卫萝卜阿波之旅。
+- 支持 `.apk`、`.apks`、`.xapk`，以及 `.apk.1`、`.xapk.2` 等单个数字后缀。分包优先读取 `base.apk`，再合并资源分包，跳过 `split_config.*.apk`。
+- 保留 WinUI 3 控件、Mica 背景、绿色主题、游戏选择、APK 拖放、系统目录选择器、进度和取消对话框、运行日志及打开输出目录。
+- 默认自动识别，依据加密头、可验证 key 和目录特征；四代也结合 `assets/res` 资源目录识别。手动选择不匹配时可切换流程、强制执行或取消。
+- 可选择包含安装包的文件夹、填写文件路径，或拖入安装包。同一文件夹有多个安装包时，拖入指定文件。
+- 支持安全覆盖同名输出：成功后提交新目录；取消或失败时保留旧输出并清理暂存。
+- 支持 CCZ/PVR、明文 plist、三代/阿波 czzf plist、四代自定义 plist 和加密 PNG atlas；可识别四代早期明文 plist 与沿用旧 key 的资源。
+- 读取含 Git 合并冲突标记的 plist 时跳过标记行与没有对应 key 的额外值，保留完整的键值内容；正常 plist 仍按结构校验。
+- 提取资源保留在输出根目录；独立加密 PNG 会在原资源路径替换为明文 PNG。`Unpacked_PNG` 仅包含图集拆分的最终 PNG，不生成整张 atlas PNG 或 `_atlases`、`_pvr` 中间目录。
+- Windows 不允许的文件名字符、末尾点和空格按 `%HH` 编码保留资源；编码后重名会报错，避免覆盖另一份资源。
 
-1. 运行 `CFUnpacker.exe`。
-2. 顶部默认选择“自动识别”；也可手动指定游戏。
-3. 选择或拖入 APK，再选择输出文件夹。
-4. 如需替换已存在的同名目录，打开“覆盖同名输出目录”。
-5. 点击“开始解包”。完成后可直接打开输出目录。
+完整解压发行 ZIP，运行 CFUnpacker.exe，选择游戏、输入和输出位置，再点击“开始解包”。最终目录使用安装包主文件名，例如 `game.xapk.2` 输出到 `game`。请只处理自己合法持有并有权使用的安装包与资源。
 
-自动识别失败时可手动指定版本；自动识别会额外尝试三代/四代 CCZ key 与 `assets/res/` 目录特征，覆盖四代 1.0.0 等尚未启用封装加密的早期版本。强制执行不匹配流程可能因 key、CRC32 或资源格式不同而跳过相关图集。请只处理自己合法持有并有权使用的 APK 与资源。
+## 系统运行时
+
+使用系统已安装的 **x64 Windows App Runtime 2.3.1 或更新的兼容 2.x 版本**。它并非所有 Windows 都预装；缺少时微软引导器会自动显示安装提示。选择“是”会打开官方获取页面，安装后重新启动程序。程序不静默下载安装运行时。
+
+发行包不含 .NET、私带 WinUI 3 运行时或 runtime 目录。旁边的 Microsoft.WindowsAppRuntime.Bootstrap.dll 是约 385 KiB 的微软官方引导器，用于发现运行时和显示缺失提示。Rust 静态链接 CRT，无需额外安装 VC++ 运行库。
+
+发布脚本从固定版本微软组件包提取引导器，并校验其 SHA-256 与数字签名。
+
+## 核心优化
+
+并行 ZIP 提取和图集处理、缓存长钥流、借用压缩输入、通道缩放查表、RGBA8888 快速复制、复用帧缓冲。PNG 使用 zlib-rs 快速无损压缩、批量扫描线与流式 IDAT，避免整图中间文件及二次读盘。默认并行度为逻辑处理器数减二，限制在 1–12 之间。
+
+自定义封装校验长度和 CRC32，并限制实际膨胀大小。提取拒绝 ZIP 路径穿越、大小写重名、符号链接及 Windows 保留路径。输出提交通过同目录暂存和备份回滚完成。GUI 在独立线程解包，用消息更新界面；取消或关闭窗口会等待资源关闭和暂存清理。
 
 ## key
 
@@ -34,39 +42,44 @@
 - 保卫萝卜3 / 阿波之旅 PVR/CCZ：`0xA8AC7F50, 0x63F379E7, 0x06AE82BA, 0x5405FE14`
 - 保卫萝卜3 / 阿波之旅 `czzf` plist：`0x26AB1359, 0x1C2485A3, 0xF2B34691, 0xAA172AF6`
 - 保卫萝卜4 PVR/CCZ：`0x3CE64A05, 0x81E437A2, 0x37DB91EC, 0x65FA03B8`
-- 保卫萝卜4（含国际版）`ff db ff ee 66` plist / PNG atlas：`0x43F21B68, 0x9A0F3610, 0x3AC65312, 0xB8926AA3`
+- 保卫萝卜4 `ff db ff ee 66` plist / PNG atlas：`0x43F21B68, 0x9A0F3610, 0x3AC65312, 0xB8926AA3`
 
-补充：一代 `Themes/scene/mainscene-hd.pvr.ccz` 使用二代兼容 key；四代少量 PVR 资源沿用三代/阿波之旅 key。国际版 Carrot Fantasy（`com.feiyu.luobo4`，.apks 分发）经样本 CRC32 验证与四代共用 PVR 与封装 key。
-
-## 核心流程
-
-1. 校验 APK/ZIP 后，仅并行提取 `assets`，并阻止 ZIP 路径越界。
-2. `CCZp` 使用 1024 词长钥流解密首 512 词，再每隔 64 词处理 1 词；`CCZ!` 直接 zlib 解压。
-3. `czzf` 与四代自定义封装连续处理首尾各 512 词，中段每 4 词处理 1 词；三代/阿波之旅使用 6 轮，四代使用 8 轮，并校验解包长度及 CRC32。
-4. PVR v2 按 header mask 解码 RGBA4444 等格式，PVR v3 按通道描述解码；三代 Android 地图图集的 `rgb/565` BGR 存储会自动校正通道；按游戏处理预乘 alpha。
-5. 图集只在内存中存在，按 plist 坐标、偏移和旋转信息直接写出最终帧。
-
-提取阶段按处理器数量使用独立 ZIP 读取器，条目定位用每个 worker 一次性建立的哈希表（避免 `GetEntry` 的线性扫描），拆图阶段最多并行处理 12 个图集；长钥流按 key/轮数缓存。`.apks`/`.xapk` 中以 STORED 存放的内层 APK 通过外层文件上的零拷贝窗口流直接读取，仅压缩存放时才回退为临时解出；独立 PNG 解密只扫描原始 assets 并按扩展名过滤，跳过 `Unpacked_PNG` 输出。PNG 使用快速无损压缩、池化帧缓冲与批量扫描线输入，避免生成整图和二次读盘。
-
-## 验证
-
-- 真实样本逐像素回归：五个游戏选项、两种四代纹理路径、旋转帧与一代兼容 key 均通过。
-- 端到端最小 APK：提取、拆图、README、落盘和暂存清理均通过。
-- APK 自动识别：一至四代、阿波之旅及未知 APK 均通过回归测试。
-- 全量现存资源扫描：4,951 个 plist、4,934 个图集、4,468 个 PVR、471 个四代加密 PNG 图集均通过解密和解码。
-- Release x64 构建：0 警告、0 错误。
+补充：一代 `Themes/scene/mainscene-hd.pvr.ccz` 使用二代兼容 key；四代少量 PVR 资源沿用三代/阿波之旅 key。
 
 ## 构建
 
-需要 Visual Studio 2022/Build Tools、.NET 10 SDK 和 Windows App SDK 工作负载。
+需要 Windows、Rust stable MSVC x64、Visual Studio C++ Build Tools 和 Windows SDK。**正式构建不需要 .NET SDK。**
 
 ```powershell
-dotnet restore CFUnpacker.csproj -r win-x64 -p:Platform=x64
-dotnet build CFUnpacker.csproj -c Release -p:Platform=x64 --no-restore
-.\Packaging\BuildRelease.ps1 -Configuration Release
+cargo test --lib
+.\Packaging\BuildRelease.ps1
 ```
 
-发布脚本会生成 `发布\CFUnpacker-win-x64.zip`。解压后根目录只包含
-`CFUnpacker.exe`、`.dll`、`.deps.json`、`.pri`、`.runtimeconfig.json`
-和 `runtime` 文件夹；根目录启动文件不会在 `runtime` 内重复，其余运行依赖均位于 `runtime`。
-程序固定使用该目录内附带的 .NET 运行时，目标电脑无需另行安装 .NET Desktop Runtime。
+生成 发布/win-x64-rust 与 发布/CFUnpacker-win-x64-rust.zip，附带第三方许可。发布脚本使用 Cargo.lock 固定依赖，从固定版本微软组件包提取引导器并核对哈希与签名。
+
+调试运行：
+
+```powershell
+.\Packaging\PrepareBootstrap.ps1 -DestinationDirectory "$PWD\target\debug"
+cargo run --bin CFUnpacker
+```
+
+命令行工具调用与 GUI 相同的 Rust 库，无需 Windows App Runtime，仅用于批处理和测试：
+
+```powershell
+cargo build --release --bin cfunpacker-core
+.\target\release\cfunpacker-core.exe detect sample.apks --json
+.\target\release\cfunpacker-core.exe unpack sample.xapk --output output --game auto
+```
+
+`unpack --overwrite` 开启安全覆盖；显式指定 `--game cf1/cf2/cf3/cf4/abo` 时使用指定流程。CLI 支持 Ctrl+C，或向标准输入发送一行 `cancel`，之后等待清理。
+
+## 验证
+
+```powershell
+cargo test --release --lib
+cargo build --release --bin cfunpacker-core
+python tests/integration.py
+```
+
+Rust 单元测试覆盖解密、CRC/长度、像素格式、alpha、旋转、偏移、分包、路径规则和输入目录保护。端到端脚本仅使用 Python 3.11+ 标准库，自动生成小型安装包并验证识别、预期裁剪/旋转/留白像素、资源提取、覆盖与取消；所有输入和输出位于临时目录，结束后清理。

@@ -1,56 +1,16 @@
-## .NET / Visual Studio
-[Bb]in/
-[Oo]bj/
+# Build and package output
+/target/
+/artifacts/
+/发布/
+/publish/
 *.obj
-[Dd]ebug/
-[Rr]elease/
+*.pdb
+
+# Generated artwork awaiting approval
+/output/imagegen/
+
+# Local tooling and logs
+__pycache__/
 .vs/
-*.user
-*.suo
-*.userosscache
-*.sln.docstates
-artifacts/
-
-# Build logs
-[Ll]og/
-[Ll]ogs/
-*.log
-*.binlog
-
-# Test results
-[Tt]est[Rr]esult*/
-*.trx
-*.coverage
-*.coveragexml
-
-# NuGet
-*.nupkg
-*.snupkg
-*.nuget.props
-*.nuget.targets
-project.lock.json
-
-# MSIX packaging output
-AppPackages/
-BundleArtifacts/
-*.msix
-*.msixupload
-*.appx
-*.appxbundle
-*.appxupload
-
-# Publish output
-publish/
-发布/
-*.pubxml
-PublishScripts/
-
-# Code analysis and tooling
-_ReSharper*/
-*.DotSettings.user
-*.dotCover
 .idea/
-
-# Generated files
-Generated\ Files/
-*_wpftmp.csproj
+*.log

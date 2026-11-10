@@ -1,215 +1,162 @@
-param(
-    [ValidateSet('Debug', 'Release')]
-    [string]$Configuration = 'Release'
-)
+param([switch]$SkipBuild)
 
 $ErrorActionPreference = 'Stop'
-$projectRoot = Split-Path -Parent $PSScriptRoot
-$releaseDirectoryName = ([char]0x53D1).ToString() + [char]0x5E03
-$zipName = 'CFUnpacker-win-x64.zip'
-$rootFiles = @(
-    'CFUnpacker.exe',
-    'CFUnpacker.dll',
-    'CFUnpacker.deps.json',
-    'CFUnpacker.pri',
-    'CFUnpacker.runtimeconfig.json'
-)
+$projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
+$releaseParent = [IO.Path]::GetFullPath((Join-Path $projectRoot '发布'))
+$releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseParent 'win-x64-rust'))
+$executable = Join-Path $projectRoot 'target\release\CFUnpacker.exe'
 
-function Get-LocalDotNetRuntime {
-    $dotnetCommand = Get-Command dotnet -ErrorAction Stop
-    $dotnetRoot = Split-Path -Parent $dotnetCommand.Source
-    $frameworkRoot = Join-Path $dotnetRoot 'shared\Microsoft.NETCore.App'
-    $fxrRoot = Join-Path $dotnetRoot 'host\fxr'
-
-    $runtime = Get-ChildItem -LiteralPath $frameworkRoot -Directory |
-        Where-Object {
-            try {
-                ([Version]$_.Name).Major -eq 10 -and
-                    (Test-Path -LiteralPath (Join-Path $fxrRoot "$($_.Name)\hostfxr.dll"))
+function Assert-NativeExecutable {
+    param([string]$Path)
+    $bytes = [IO.File]::ReadAllBytes($Path)
+    if ($bytes.Length -lt 256 -or [Text.Encoding]::ASCII.GetString($bytes, 0, 2) -ne 'MZ') {
+        throw 'The application is not a Windows PE executable.'
+    }
+    $pe = [BitConverter]::ToInt32($bytes, 0x3c)
+    if ([BitConverter]::ToUInt32($bytes, $pe) -ne 0x00004550 -or
+        [BitConverter]::ToUInt16($bytes, $pe + 4) -ne 0x8664) {
+        throw 'The application must be an x64 PE executable.'
+    }
+    $optional = $pe + 24
+    if ([BitConverter]::ToUInt16($bytes, $optional) -ne 0x20b) {
+        throw 'The application must use the PE32+ format.'
+    }
+    # Data directory 14 is IMAGE_DIRECTORY_ENTRY_COM_DESCRIPTOR. A native Rust
+    # executable has no CLR header; this check rejects a managed app accidentally
+    # copied from an earlier C# build.
+    if ([BitConverter]::ToUInt32($bytes, $optional + 112 + 14 * 8) -ne 0) {
+        throw 'The release executable unexpectedly has a .NET CLR header.'
+    }
+    # A .NET apphost is itself a native PE and loads hostfxr dynamically, so its
+    # imports/CLR directory alone cannot identify it. Check host payload markers
+    # in both encodings used by the Windows host as well.
+    foreach ($encoding in @([Text.Encoding]::ASCII, [Text.Encoding]::Unicode)) {
+        $payload = $encoding.GetString($bytes)
+        if ($payload -match '(?i)hostfxr\.dll|coreclr\.dll|\.runtimeconfig\.json') {
+            throw 'The executable unexpectedly contains a .NET apphost/runtime payload.'
+        }
+    }
+    $sectionCount = [BitConverter]::ToUInt16($bytes, $pe + 6)
+    $sectionTable = $optional + [BitConverter]::ToUInt16($bytes, $pe + 20)
+    function Convert-RvaToOffset([uint32]$Rva) {
+        for ($index = 0; $index -lt $sectionCount; $index++) {
+            $section = $sectionTable + 40 * $index
+            $virtualSize = [BitConverter]::ToUInt32($bytes, $section + 8)
+            $address = [BitConverter]::ToUInt32($bytes, $section + 12)
+            $rawSize = [BitConverter]::ToUInt32($bytes, $section + 16)
+            if ($Rva -ge $address -and $Rva -lt $address + [Math]::Max($virtualSize, $rawSize)) {
+                return [int]($Rva - $address + [BitConverter]::ToUInt32($bytes, $section + 20))
             }
-            catch {
-                $false
-            }
-        } |
-        Sort-Object { [Version]$_.Name } -Descending |
-        Select-Object -First 1
-
-    if ($null -eq $runtime) {
-        throw '.NET 10 x64 runtime files were not found beside the active dotnet host.'
-    }
-
-    [pscustomobject]@{
-        Root = $dotnetRoot
-        Version = $runtime.Name
-        FrameworkDirectory = $runtime.FullName
-        HostFxrPath = Join-Path $fxrRoot "$($runtime.Name)\hostfxr.dll"
-    }
-}
-
-function Move-RuntimeFiles {
-    param(
-        [Parameter(Mandatory)] [string]$ReleaseRoot,
-        [Parameter(Mandatory)] [string]$RuntimeDirectory
-    )
-
-    New-Item -ItemType Directory -Force -Path $RuntimeDirectory | Out-Null
-    foreach ($item in @(Get-ChildItem -LiteralPath $ReleaseRoot -Force)) {
-        if ($item.Name -eq 'runtime' -or $rootFiles -contains $item.Name) {
-            continue
         }
-
-        Move-Item -LiteralPath $item.FullName -Destination $RuntimeDirectory
+        throw "Cannot map PE RVA $Rva"
     }
-}
-
-function Copy-LocalDotNetRuntime {
-    param(
-        [Parameter(Mandatory)] [pscustomobject]$Runtime,
-        [Parameter(Mandatory)] [string]$Destination
-    )
-
-    $fxrDestination = Join-Path $Destination "host\fxr\$($Runtime.Version)"
-    $frameworkDestination = Join-Path $Destination "shared\Microsoft.NETCore.App\$($Runtime.Version)"
-    New-Item -ItemType Directory -Force -Path $fxrDestination, $frameworkDestination | Out-Null
-
-    Copy-Item -LiteralPath $Runtime.HostFxrPath -Destination $fxrDestination
-    Copy-Item -Path (Join-Path $Runtime.FrameworkDirectory '*') -Destination $frameworkDestination -Recurse
-
-    foreach ($file in @('dotnet.exe', 'LICENSE.txt', 'ThirdPartyNotices.txt')) {
-        $source = Join-Path $Runtime.Root $file
-        if (Test-Path -LiteralPath $source -PathType Leaf) {
-            Copy-Item -LiteralPath $source -Destination $Destination
+    $imports = @()
+    $importRva = [BitConverter]::ToUInt32($bytes, $optional + 112 + 8)
+    if ($importRva -ne 0) {
+        $descriptor = Convert-RvaToOffset $importRva
+        while ([BitConverter]::ToUInt32($bytes, $descriptor + 12) -ne 0) {
+            $nameOffset = Convert-RvaToOffset ([BitConverter]::ToUInt32($bytes, $descriptor + 12))
+            $end = $nameOffset
+            while ($bytes[$end] -ne 0) { $end++ }
+            $imports += [Text.Encoding]::ASCII.GetString($bytes, $nameOffset, $end - $nameOffset)
+            $descriptor += 20
         }
     }
-}
-
-function Set-RelocatedWinAppManifest {
-    param(
-        [Parameter(Mandatory)] [string]$ExecutablePath,
-        [Parameter(Mandatory)] [string]$GeneratedManifest,
-        [Parameter(Mandatory)] [string]$VisualStudioPath
-    )
-
-    [xml]$manifest = Get-Content -LiteralPath $GeneratedManifest -Raw
-    foreach ($fileNode in $manifest.SelectNodes("//*[local-name()='file']")) {
-        $name = $fileNode.GetAttribute('name')
-        if (-not [string]::IsNullOrWhiteSpace($name) -and
-            -not $name.StartsWith('runtime\', [StringComparison]::OrdinalIgnoreCase)) {
-            $fileNode.SetAttribute('name', "runtime\$name")
+    foreach ($name in $imports) {
+        if ($name -match '^(mscoree|coreclr|hostfxr|hostpolicy|vcruntime\d+|msvcp\d+).*\.dll$') {
+            throw "The application unexpectedly imports an external language runtime: $name"
         }
     }
-
-    $temporaryManifest = Join-Path ([IO.Path]::GetTempPath()) "CFUnpacker-$([Guid]::NewGuid().ToString('N')).manifest"
-    $settings = [Xml.XmlWriterSettings]::new()
-    $settings.Encoding = [Text.UTF8Encoding]::new($false)
-    $settings.Indent = $true
-    $writer = [Xml.XmlWriter]::Create($temporaryManifest, $settings)
-    try {
-        $manifest.Save($writer)
-    }
-    finally {
-        $writer.Dispose()
-    }
-
-    try {
-        $vcvars = Join-Path $VisualStudioPath 'VC\Auxiliary\Build\vcvars64.bat'
-        $command = 'call "' + $vcvars + '" >nul && mt.exe -nologo -manifest "' +
-            $temporaryManifest + '" -outputresource:"' + $ExecutablePath + '";#1'
-        & cmd.exe /d /c $command
-        if ($LASTEXITCODE -ne 0) {
-            throw "Manifest update failed: $LASTEXITCODE"
-        }
-    }
-    finally {
-        if (Test-Path -LiteralPath $temporaryManifest) {
-            [IO.File]::Delete($temporaryManifest)
-        }
-    }
-}
-
-function Assert-ReleaseLayout {
-    param(
-        [Parameter(Mandatory)] [string]$ReleaseRoot,
-        [Parameter(Mandatory)] [string]$RuntimeDirectory
-    )
-
-    $expected = @($rootFiles) + 'runtime'
-    $actual = @(Get-ChildItem -LiteralPath $ReleaseRoot -Force | Select-Object -ExpandProperty Name)
-    $unexpected = @($actual | Where-Object { $expected -notcontains $_ })
-    $missing = @($expected | Where-Object { $actual -notcontains $_ })
-    if ($unexpected.Count -gt 0 -or $missing.Count -gt 0) {
-        throw "Invalid release root. Missing: $($missing -join ', '); unexpected: $($unexpected -join ', ')"
-    }
-
-    foreach ($file in $rootFiles) {
-        if (Test-Path -LiteralPath (Join-Path $RuntimeDirectory $file)) {
-            throw "Root application file was duplicated in runtime: $file"
-        }
-    }
-
-    $framework = Get-ChildItem -LiteralPath (Join-Path $RuntimeDirectory 'shared\Microsoft.NETCore.App') -Directory |
-        Select-Object -First 1
-    if ($null -eq $framework -or
-        -not (Test-Path -LiteralPath (Join-Path $framework.FullName 'coreclr.dll'))) {
-        throw 'The bundled .NET runtime is incomplete.'
-    }
-}
-
-$vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
-if (-not (Test-Path -LiteralPath $vswhere)) {
-    throw 'Visual Studio Build Tools are required to update the application manifest.'
-}
-
-$visualStudio = & $vswhere -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
-if ([string]::IsNullOrWhiteSpace($visualStudio)) {
-    throw 'Visual Studio C++ Build Tools were not found.'
+    return $imports
 }
 
 Push-Location $projectRoot
 try {
-    $releaseParent = [IO.Path]::GetFullPath((Join-Path $projectRoot $releaseDirectoryName))
-    $releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseParent 'win-x64'))
-    if (-not $releaseRoot.StartsWith($releaseParent + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'Refusing to modify a directory outside the release folder.'
+    $cargoCommand = Get-Command cargo -ErrorAction SilentlyContinue
+    $cargoPath = if ($cargoCommand) { $cargoCommand.Source } else { Join-Path $env:USERPROFILE '.cargo\bin\cargo.exe' }
+    if (-not (Test-Path -LiteralPath $cargoPath)) {
+        throw 'Install the Rust stable MSVC toolchain from https://rustup.rs/ and Visual Studio C++ Build Tools.'
     }
-
+    if (-not $SkipBuild) {
+        & $cargoPath build --release --bin CFUnpacker --locked | Out-Host
+        if ($LASTEXITCODE -ne 0) { throw "Rust GUI build failed: $LASTEXITCODE" }
+    }
+    if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) {
+        throw "Rust GUI executable not found: $executable"
+    }
+    $imports = @(Assert-NativeExecutable -Path $executable)
+    # Resolve and validate before deleting only our own current release variant.
+    if (-not $releaseRoot.StartsWith($releaseParent + [IO.Path]::DirectorySeparatorChar,
+            [StringComparison]::OrdinalIgnoreCase)) {
+        throw "Refusing to modify a path outside the release directory: $releaseRoot"
+    }
     if (Test-Path -LiteralPath $releaseRoot) {
-        [IO.Directory]::Delete($releaseRoot, $true)
+        Remove-Item -LiteralPath $releaseRoot -Recurse -Force
     }
-    New-Item -ItemType Directory -Force -Path $releaseRoot | Out-Null
+    New-Item -ItemType Directory -Path $releaseRoot -Force | Out-Null
+    Copy-Item -LiteralPath $executable -Destination $releaseRoot
+    Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseRoot
+    $assetsDirectory = Join-Path $releaseRoot 'Assets'
+    New-Item -ItemType Directory -Path $assetsDirectory -Force | Out-Null
+    foreach ($asset in @('AppIcon.ico', 'Square44x44Logo.targetsize-48_altform-lightunplated.png')) {
+        Copy-Item -LiteralPath (Join-Path $projectRoot "Assets\$asset") -Destination $assetsDirectory
+    }
+    & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot | Out-Host
 
-    & dotnet publish CFUnpacker.csproj -c $Configuration -r win-x64 --self-contained false `
-        -p:Platform=x64 `
-        "-p:PublishDir=$releaseRoot\" `
-        -p:AppHostRelativeDotNet=runtime `
-        -p:AppHostDotNetSearch=AppRelative `
-        --no-restore
-    if ($LASTEXITCODE -ne 0) {
-        throw "Publish failed: $LASTEXITCODE"
+    # Collect the declared licenses and copyright notices of the resolved Rust
+    # packages from Cargo's downloaded sources, without requiring the .NET SDK.
+    $metadataJson = & $cargoPath metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc
+    if ($LASTEXITCODE -ne 0) { throw 'Cargo dependency metadata could not be read.' }
+    $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
+    $notice = [Collections.Generic.List[string]]::new()
+    $notice.Add('# Third-party components')
+    $notice.Add('')
+    $notice.Add('Microsoft.WindowsAppRuntime.Bootstrap.dll: Microsoft.WindowsAppSDK.Foundation 2.3.5; see Microsoft.WindowsAppSDK.Foundation.txt.')
+    $notice.Add('Application COM composition: adapted from naui-windows 0.16.0; copyright (c) 2026 mokuichi147, MIT; see naui-windows-application-MIT.txt.')
+    $notice.Add('')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'naui-windows-application-MIT.txt') -Destination (Join-Path $releaseRoot 'Licenses')
+    foreach ($package in $metadata.packages | Sort-Object name, version) {
+        if ($package.name -eq 'cfunpacker') { continue }
+        $notice.Add("- $($package.name) $($package.version): $($package.license) ($($package.repository))")
+        $sourceRoot = Split-Path -Parent $package.manifest_path
+        $licenseFiles = @(Get-ChildItem -LiteralPath $sourceRoot -File |
+            Where-Object { $_.Name -match '^(LICENSE|LICENCE|NOTICE|COPYING)([-_.].*)?$' })
+        if ($package.license_file) {
+            $licenseFiles += Get-Item -LiteralPath (Join-Path $sourceRoot $package.license_file)
+        }
+        foreach ($license in $licenseFiles | Sort-Object FullName -Unique) {
+            $name = "$($package.name)-$($package.version)-$($license.Name).txt"
+            Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $releaseRoot "Licenses\$name")
+        }
+    }
+    $notice | Set-Content -LiteralPath (Join-Path $releaseRoot 'Licenses\THIRD_PARTY_NOTICES.md') -Encoding utf8
+    foreach ($forbidden in @('runtime', 'CFUnpacker.dll', 'CFUnpacker.runtimeconfig.json', 'cfunpacker-core.exe', 'coreclr.dll', 'Microsoft.UI.Xaml.dll')) {
+        if (Test-Path -LiteralPath (Join-Path $releaseRoot $forbidden)) {
+            throw "Unexpected legacy/runtime file in the native release: $forbidden"
+        }
     }
 
-    $runtimeDirectory = Join-Path $releaseRoot 'runtime'
-    Move-RuntimeFiles -ReleaseRoot $releaseRoot -RuntimeDirectory $runtimeDirectory
-    Copy-LocalDotNetRuntime -Runtime (Get-LocalDotNetRuntime) -Destination $runtimeDirectory
-
-    $generatedManifest = Get-ChildItem -LiteralPath (Join-Path $projectRoot "obj\x64\$Configuration") -File -Recurse -Filter 'app.manifest' |
-        Where-Object { $_.FullName -like '*\Manifests\app.manifest' } |
-        Sort-Object LastWriteTimeUtc -Descending |
-        Select-Object -First 1 -ExpandProperty FullName
-    if ([string]::IsNullOrWhiteSpace($generatedManifest)) {
-        throw 'The generated Windows App SDK manifest was not found.'
+    $zipPath = Join-Path $releaseParent 'CFUnpacker-win-x64-rust.zip'
+    # Some crates publish license files with a pre-1980 source timestamp. ZIP's
+    # DOS date format cannot represent that date; normalize copied notices only.
+    $zipEpoch = [DateTime]::new(1980, 1, 1)
+    Get-ChildItem -LiteralPath (Join-Path $releaseRoot 'Licenses') -File | ForEach-Object {
+        if ($_.LastWriteTime -lt $zipEpoch) { $_.LastWriteTime = $zipEpoch }
     }
-
-    Set-RelocatedWinAppManifest `
-        -ExecutablePath (Join-Path $releaseRoot 'CFUnpacker.exe') `
-        -GeneratedManifest $generatedManifest `
-        -VisualStudioPath $visualStudio
-    Assert-ReleaseLayout -ReleaseRoot $releaseRoot -RuntimeDirectory $runtimeDirectory
-
-    $zipPath = Join-Path $releaseParent $zipName
     Compress-Archive -LiteralPath $releaseRoot -DestinationPath $zipPath -CompressionLevel Optimal -Force
-    Get-Item -LiteralPath $zipPath
+    $files = @(Get-ChildItem -LiteralPath $releaseRoot -File -Recurse)
+    $summary = [pscustomobject]@{
+        Variant = 'native-rust-winui3-system-runtime'
+        FileCount = $files.Count
+        UnpackedBytes = [long](($files | Measure-Object -Property Length -Sum).Sum)
+        ZipBytes = (Get-Item -LiteralPath $zipPath).Length
+        ExeBytes = (Get-Item -LiteralPath (Join-Path $releaseRoot 'CFUnpacker.exe')).Length
+        BootstrapBytes = (Get-Item -LiteralPath (Join-Path $releaseRoot 'Microsoft.WindowsAppRuntime.Bootstrap.dll')).Length
+        NativeImports = $imports
+        Directory = $releaseRoot
+        Archive = $zipPath
+    }
+    $summary | ConvertTo-Json -Depth 3 | Set-Content -LiteralPath (Join-Path $releaseParent 'package-sizes.json') -Encoding utf8
+    $summary | Format-List
 }
-finally {
-    Pop-Location
-}
+finally { Pop-Location }
