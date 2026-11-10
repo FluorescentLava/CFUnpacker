@@ -59,7 +59,7 @@ cargo test --lib
 .\Packaging\BuildRelease.ps1
 ```
 
-生成 发布/win-x64 与 发布/CFUnpacker-win-x64.zip，附带第三方许可。发布脚本使用 Cargo.lock 固定依赖，从固定版本微软组件包提取引导器并核对哈希与签名。
+生成 发布/win-x64 与 发布/CFUnpacker-win-x64.zip。发布脚本使用 Cargo.lock 固定依赖，从固定版本微软组件包提取引导器并核对哈希与签名。
 
 调试运行：
 

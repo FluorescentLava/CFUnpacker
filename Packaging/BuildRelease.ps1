@@ -108,48 +108,15 @@ try {
     foreach ($asset in @('AppIcon.ico', 'AppIcon.png', 'Square44x44Logo.targetsize-48_altform-lightunplated.png')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot "Assets\$asset") -Destination $assetsDirectory
     }
-    & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot | Out-Host
+    & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot -SkipLicenses | Out-Host
 
-    # Collect the declared licenses and copyright notices of the resolved Rust
-    # packages from Cargo's downloaded sources, without requiring the .NET SDK.
-    $metadataJson = & $cargoPath metadata --locked --format-version 1 --filter-platform x86_64-pc-windows-msvc
-    if ($LASTEXITCODE -ne 0) { throw 'Cargo dependency metadata could not be read.' }
-    $metadata = ($metadataJson -join "`n") | ConvertFrom-Json
-    $notice = [Collections.Generic.List[string]]::new()
-    $notice.Add('# Third-party components')
-    $notice.Add('')
-    $notice.Add('Microsoft.WindowsAppRuntime.Bootstrap.dll: Microsoft.WindowsAppSDK.Foundation 2.3.5; see Microsoft.WindowsAppSDK.Foundation.txt.')
-    $notice.Add('Application COM composition: adapted from naui-windows 0.16.0; copyright (c) 2026 mokuichi147, MIT; see naui-windows-application-MIT.txt.')
-    $notice.Add('')
-    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'naui-windows-application-MIT.txt') -Destination (Join-Path $releaseRoot 'Licenses')
-    foreach ($package in $metadata.packages | Sort-Object name, version) {
-        if ($package.name -eq 'cfunpacker') { continue }
-        $notice.Add("- $($package.name) $($package.version): $($package.license) ($($package.repository))")
-        $sourceRoot = Split-Path -Parent $package.manifest_path
-        $licenseFiles = @(Get-ChildItem -LiteralPath $sourceRoot -File |
-            Where-Object { $_.Name -match '^(LICENSE|LICENCE|NOTICE|COPYING)([-_.].*)?$' })
-        if ($package.license_file) {
-            $licenseFiles += Get-Item -LiteralPath (Join-Path $sourceRoot $package.license_file)
-        }
-        foreach ($license in $licenseFiles | Sort-Object FullName -Unique) {
-            $name = "$($package.name)-$($package.version)-$($license.Name).txt"
-            Copy-Item -LiteralPath $license.FullName -Destination (Join-Path $releaseRoot "Licenses\$name")
-        }
-    }
-    $notice | Set-Content -LiteralPath (Join-Path $releaseRoot 'Licenses\THIRD_PARTY_NOTICES.md') -Encoding utf8
-    foreach ($forbidden in @('runtime', 'CFUnpacker.dll', 'CFUnpacker.runtimeconfig.json', 'cfunpacker-core.exe', 'coreclr.dll', 'Microsoft.UI.Xaml.dll')) {
+    foreach ($forbidden in @('Licenses', 'runtime', 'CFUnpacker.dll', 'CFUnpacker.runtimeconfig.json', 'cfunpacker-core.exe', 'coreclr.dll', 'Microsoft.UI.Xaml.dll')) {
         if (Test-Path -LiteralPath (Join-Path $releaseRoot $forbidden)) {
             throw "Unexpected legacy/runtime file in the native release: $forbidden"
         }
     }
 
     $zipPath = Join-Path $releaseParent 'CFUnpacker-win-x64.zip'
-    # Some crates publish license files with a pre-1980 source timestamp. ZIP's
-    # DOS date format cannot represent that date; normalize copied notices only.
-    $zipEpoch = [DateTime]::new(1980, 1, 1)
-    Get-ChildItem -LiteralPath (Join-Path $releaseRoot 'Licenses') -File | ForEach-Object {
-        if ($_.LastWriteTime -lt $zipEpoch) { $_.LastWriteTime = $zipEpoch }
-    }
     Compress-Archive -LiteralPath $releaseRoot -DestinationPath $zipPath -CompressionLevel Optimal -Force
     $files = @(Get-ChildItem -LiteralPath $releaseRoot -File -Recurse)
     $summary = [pscustomobject]@{

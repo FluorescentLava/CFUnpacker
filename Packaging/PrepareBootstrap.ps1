@@ -1,5 +1,6 @@
 param(
-    [string]$DestinationDirectory
+    [string]$DestinationDirectory,
+    [switch]$SkipLicenses
 )
 
 $ErrorActionPreference = 'Stop'
@@ -34,11 +35,13 @@ if ($actualHash -ne $expectedSha256) {
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
 New-Item -ItemType Directory -Path $destination -Force | Out-Null
-$licenseDirectory = Join-Path $destination 'Licenses'
-New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
 $entries = @{
     'runtimes/win-x64/native/Microsoft.WindowsAppRuntime.Bootstrap.dll' = (Join-Path $destination 'Microsoft.WindowsAppRuntime.Bootstrap.dll')
-    'license.txt' = (Join-Path $licenseDirectory 'Microsoft.WindowsAppSDK.Foundation.txt')
+}
+if (-not $SkipLicenses) {
+    $licenseDirectory = Join-Path $destination 'Licenses'
+    New-Item -ItemType Directory -Path $licenseDirectory -Force | Out-Null
+    $entries['license.txt'] = Join-Path $licenseDirectory 'Microsoft.WindowsAppSDK.Foundation.txt'
 }
 $archive = [IO.Compression.ZipFile]::OpenRead($packagePath)
 try {
