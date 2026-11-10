@@ -1,6 +1,10 @@
+<p align="center"><img src="Assets/AppIcon.png" width="128" alt="CFUnpacker 图标" /></p>
+
 # CFUnpacker
 
 解包工具作者：熔萤FluorescentLava
+
+[下载 Windows x64 版](https://github.com/FluorescentLava/CFUnpacker/releases/latest)
 
 使用 **Rust + 原生 WinUI 3** 实现的保卫萝卜系列 APK 解包工具。界面通过 WinRT 投影直接调用 WinUI 3，解包核心直接链接进 GUI；正式程序没有 C#、.NET 或解包子进程。
 

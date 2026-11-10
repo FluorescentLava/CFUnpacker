@@ -1,8 +1,15 @@
-param([switch]$SkipBuild)
+param(
+    [switch]$SkipBuild,
+    [string]$OutputDirectory
+)
 
 $ErrorActionPreference = 'Stop'
 $projectRoot = [IO.Path]::GetFullPath((Split-Path -Parent $PSScriptRoot))
-$releaseParent = [IO.Path]::GetFullPath((Join-Path $projectRoot '发布'))
+$releaseParent = if ([string]::IsNullOrWhiteSpace($OutputDirectory)) {
+    [IO.Path]::GetFullPath((Join-Path $projectRoot '发布'))
+} else {
+    [IO.Path]::GetFullPath($OutputDirectory)
+}
 $releaseRoot = [IO.Path]::GetFullPath((Join-Path $releaseParent 'win-x64-rust'))
 $executable = Join-Path $projectRoot 'target\release\CFUnpacker.exe'
 
@@ -98,7 +105,7 @@ try {
     Copy-Item -LiteralPath (Join-Path $projectRoot 'README.md') -Destination $releaseRoot
     $assetsDirectory = Join-Path $releaseRoot 'Assets'
     New-Item -ItemType Directory -Path $assetsDirectory -Force | Out-Null
-    foreach ($asset in @('AppIcon.ico', 'Square44x44Logo.targetsize-48_altform-lightunplated.png')) {
+    foreach ($asset in @('AppIcon.ico', 'AppIcon.png', 'Square44x44Logo.targetsize-48_altform-lightunplated.png')) {
         Copy-Item -LiteralPath (Join-Path $projectRoot "Assets\$asset") -Destination $assetsDirectory
     }
     & (Join-Path $PSScriptRoot 'PrepareBootstrap.ps1') -DestinationDirectory $releaseRoot | Out-Host

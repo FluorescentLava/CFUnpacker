@@ -123,6 +123,12 @@ impl Ui {
         let window = Window::new()?;
         window.SetTitle(&h("CFUnpacker"))?;
         window.SetSystemBackdrop(&MicaBackdrop::new()?)?;
+        let assets = std::env::current_exe()?.parent().unwrap().join("Assets");
+        let assets = if assets.is_dir() {
+            assets
+        } else {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Assets")
+        };
         let layout: FrameworkElement =
             XamlReader::Load(&h(include_str!("../ui/MainWindow.xaml")))?.cast()?;
         window.SetContent(&layout)?;
@@ -139,11 +145,9 @@ impl Ui {
             Width: 900,
             Height: 1024,
         })?;
-        if let Ok(exe) = std::env::current_exe() {
-            let icon = exe.parent().unwrap().join("Assets/AppIcon.ico");
-            if icon.is_file() {
-                let _ = app_window.SetIcon(&h(icon.to_string_lossy()));
-            }
+        let icon = assets.join("AppIcon.ico");
+        if icon.is_file() {
+            let _ = app_window.SetIcon(&h(icon.to_string_lossy()));
         }
         let timer = window.DispatcherQueue()?.CreateTimer()?;
         timer.SetInterval(TimeSpan { Duration: 500_000 })?;

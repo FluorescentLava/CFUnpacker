@@ -1,6 +1,8 @@
 <Grid xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml">
 <Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/></Grid.RowDefinitions>
-<TitleBar x:Name="AppTitleBar" Title="CFUnpacker" Subtitle="熔萤FluorescentLava" />
+<TitleBar x:Name="AppTitleBar" Title="CFUnpacker" Subtitle="熔萤FluorescentLava">
+    <TitleBar.IconSource><BitmapIconSource UriSource="ms-appx:///Assets/Square44x44Logo.targetsize-48_altform-lightunplated.png" ShowAsMonochrome="False" /></TitleBar.IconSource>
+</TitleBar>
 <Page
     x:Name="MainPage" Grid.Row="1"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
