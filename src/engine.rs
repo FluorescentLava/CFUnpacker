@@ -43,7 +43,7 @@ pub struct Stats {
 
 pub fn default_workers() -> usize {
     std::thread::available_parallelism()
-        .map(|n| n.get().saturating_sub(2).clamp(1, 12))
+        .map(|n| n.get().clamp(1, 12))
         .unwrap_or(1)
 }
 
@@ -135,13 +135,61 @@ pub fn safe_relative(name: &str) -> Result<PathBuf> {
     Ok(result)
 }
 
+struct Extraction {
+    assets: usize,
+    decrypted_pngs: usize,
+    warnings: Vec<String>,
+}
+
+fn copy_asset(
+    source: &mut impl Read,
+    output: &mut impl Write,
+    buffer: &mut [u8],
+    expected: u64,
+    cancel: &AtomicBool,
+) -> Result<()> {
+    let mut copied = 0_u64;
+    loop {
+        check_cancel(cancel)?;
+        let read = source.read(buffer)?;
+        if read == 0 {
+            break;
+        }
+        copied += read as u64;
+        ensure!(copied <= expected, "APK 实际资源长度超出声明值");
+        output.write_all(&buffer[..read])?;
+    }
+    ensure!(copied == expected, "APK 资源长度不一致");
+    Ok(())
+}
+
+fn is_wrapped_png(source: &[u8]) -> bool {
+    source.starts_with(b"czzf") || source.starts_with(&[0xff, 0xdb, 0xff, 0xee, 0x66])
+}
+
+fn decode_wrapped_png(
+    source: &[u8],
+    keys: &[(crate::profile::Key, u32)],
+    cancel: &AtomicBool,
+) -> Result<Vec<u8>> {
+    for (key, rounds) in keys {
+        check_cancel(cancel)?;
+        if let Ok(decoded) = codec::decode_custom(source, key, *rounds) {
+            ensure!(codec::looks_like_png(&decoded), "封装中的资源不是 PNG");
+            return Ok(decoded);
+        }
+    }
+    bail!("没有可通过长度与 CRC32 校验的 PNG 解密 key")
+}
+
 fn extract(
     bundle: &ApkBundle,
     root: &Path,
+    game: Game,
     workers: usize,
     cancel: &AtomicBool,
     report: &(impl Fn(Progress) + Sync),
-) -> Result<usize> {
+) -> Result<Extraction> {
     let mut entries = Vec::new();
     let mut seen = HashMap::new();
     let mut directories = HashSet::new();
@@ -207,11 +255,15 @@ fn extract(
     }
     ensure!(!entries.is_empty(), "APK 中没有 assets 资源目录。");
     let count = AtomicUsize::new(0);
+    let decrypted_pngs = AtomicUsize::new(0);
+    let warnings = Mutex::new(Vec::new());
+    let keys = game.wrapper_keys();
     (0..workers.min(entries.len()))
         .into_par_iter()
         .try_for_each(|worker| -> Result<()> {
             let mut archives = bundle.open_archives()?;
             let mut buffer = vec![0_u8; 256 * 1024];
+            let mut wrapped = Vec::new();
             for (source_index, index, output) in entries
                 .iter()
                 .skip(worker)
@@ -219,19 +271,44 @@ fn extract(
             {
                 check_cancel(cancel)?;
                 let mut entry = archives[*source_index].by_index(*index)?;
-                let mut file = File::create(output)?;
-                let mut copied = 0_u64;
-                loop {
-                    check_cancel(cancel)?;
-                    let read = entry.read(&mut buffer)?;
-                    if read == 0 {
-                        break;
-                    }
-                    copied += read as u64;
-                    ensure!(copied <= 1024 * 1024 * 1024, "APK 实际资源大小超限");
-                    file.write_all(&buffer[..read])?;
+                let png = output
+                    .extension()
+                    .is_some_and(|extension| extension.eq_ignore_ascii_case("png"));
+                let mut first = entry.read(&mut buffer)?;
+                // Read implementations may return fewer bytes than requested.
+                while png && first < 5 && (first as u64) < entry.size() {
+                    let read = entry.read(&mut buffer[first..5])?;
+                    ensure!(read != 0, "APK 资源长度不一致");
+                    first += read;
                 }
-                ensure!(copied == entry.size(), "APK 资源长度不一致");
+                ensure!(first as u64 <= entry.size(), "APK 资源长度不一致");
+                let remaining = entry.size() - first as u64;
+                if png && is_wrapped_png(&buffer[..first]) {
+                    wrapped.clear();
+                    wrapped.extend_from_slice(&buffer[..first]);
+                    copy_asset(&mut entry, &mut wrapped, &mut buffer, remaining, cancel)?;
+                    // The entire output is already private staging. Decode before its
+                    // first write; unpack's directory commit provides atomicity.
+                    match decode_wrapped_png(&wrapped, &keys, cancel) {
+                        Ok(decoded) => {
+                            check_cancel(cancel)?;
+                            fs::write(output, decoded)?;
+                            decrypted_pngs.fetch_add(1, Ordering::Relaxed);
+                        }
+                        Err(error) => {
+                            check_cancel(cancel)?;
+                            fs::write(output, &wrapped)?;
+                            warnings.lock().unwrap().push(format!(
+                                "独立图片解密失败 {}: {error:#}",
+                                output.strip_prefix(root).unwrap_or(output).display()
+                            ));
+                        }
+                    }
+                } else {
+                    let mut file = File::create(output)?;
+                    file.write_all(&buffer[..first])?;
+                    copy_asset(&mut entry, &mut file, &mut buffer, remaining, cancel)?;
+                }
                 let done = count.fetch_add(1, Ordering::Relaxed) + 1;
                 if done.is_multiple_of(32) || done == entries.len() {
                     progress(
@@ -246,7 +323,11 @@ fn extract(
             }
             Ok(())
         })?;
-    Ok(count.load(Ordering::Relaxed))
+    Ok(Extraction {
+        assets: count.into_inner(),
+        decrypted_pngs: decrypted_pngs.into_inner(),
+        warnings: warnings.into_inner().unwrap(),
+    })
 }
 
 pub fn split_directory(
@@ -346,91 +427,6 @@ pub fn split_directory(
     })
 }
 
-fn decrypt_standalone_pngs(
-    root: &Path,
-    game: Game,
-    workers: usize,
-    cancel: &AtomicBool,
-    stats: &mut Stats,
-) -> Result<()> {
-    let png_root = root.join("Unpacked_PNG");
-    let mut candidates = Vec::new();
-    for entry in walkdir::WalkDir::new(root)
-        .into_iter()
-        .filter_entry(|entry| entry.path() != png_root)
-    {
-        check_cancel(cancel)?;
-        let entry = entry?;
-        if !entry.file_type().is_file()
-            || !entry
-                .path()
-                .extension()
-                .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
-        {
-            continue;
-        }
-        candidates.push(entry.into_path());
-    }
-    if candidates.is_empty() {
-        return Ok(());
-    }
-    let keys = game.wrapper_keys();
-    let count = AtomicUsize::new(0);
-    let warnings = Mutex::new(Vec::new());
-    let pool = rayon::ThreadPoolBuilder::new()
-        .num_threads(workers)
-        .build()?;
-    pool.install(|| {
-        candidates.par_iter().try_for_each(|path| -> Result<()> {
-            check_cancel(cancel)?;
-            let mut header = [0; 5];
-            let mut file = File::open(path)?;
-            let read = file.read(&mut header)?;
-            if !((read >= 4 && header[..4] == *b"czzf")
-                || (read == 5 && header == [0xff, 0xdb, 0xff, 0xee, 0x66]))
-            {
-                return Ok(());
-            }
-            let result = (|| -> Result<()> {
-                let mut source = header[..read].to_vec();
-                file.read_to_end(&mut source)?;
-                drop(file);
-                for (key, rounds) in &keys {
-                    check_cancel(cancel)?;
-                    if let Ok(decoded) = codec::decode_custom(&source, key, *rounds) {
-                        ensure!(codec::looks_like_png(&decoded), "封装中的资源不是 PNG");
-                        let mut replacement = tempfile::NamedTempFile::new_in(
-                            path.parent().context("PNG 父目录无效")?,
-                        )?;
-                        replacement.write_all(&decoded)?;
-                        check_cancel(cancel)?;
-                        replacement.persist(path)?;
-                        return Ok(());
-                    }
-                }
-                bail!("没有可通过长度与 CRC32 校验的 PNG 解密 key")
-            })();
-            match result {
-                Ok(()) => {
-                    count.fetch_add(1, Ordering::Relaxed);
-                }
-                Err(error) => {
-                    check_cancel(cancel)?;
-                    warnings.lock().unwrap().push(format!(
-                        "独立图片解密失败 {}: {error:#}",
-                        path.strip_prefix(root).unwrap_or(path).display()
-                    ));
-                }
-            }
-            Ok(())
-        })
-    })?;
-    stats.decrypted_standalone_pngs = count.into_inner();
-    stats.warnings.extend(warnings.into_inner().unwrap());
-    stats.warnings.sort();
-    Ok(())
-}
-
 pub fn unpack(
     apk: &Path,
     parent: &Path,
@@ -477,7 +473,8 @@ pub fn unpack(
         .num_threads(workers)
         .build()?;
     let bundle = ApkBundle::resolve(&apk, cancel)?;
-    let extracted = pool.install(|| extract(&bundle, staging.path(), workers, cancel, report))?;
+    let extracted =
+        pool.install(|| extract(&bundle, staging.path(), game, workers, cancel, report))?;
     drop(bundle);
     progress(
         report,
@@ -495,18 +492,13 @@ pub fn unpack(
         cancel,
         report,
     )?;
-    stats.assets_extracted = extracted;
+    stats.assets_extracted = extracted.assets;
+    stats.decrypted_standalone_pngs = extracted.decrypted_pngs;
+    stats.warnings.extend(extracted.warnings);
+    stats.warnings.sort();
     stats.output_path = final_path.to_string_lossy().into_owned();
     check_cancel(cancel)?;
-    progress(
-        report,
-        "Scanning",
-        94.0,
-        "正在解密独立加密图片…".into(),
-        0,
-        0,
-    );
-    decrypt_standalone_pngs(staging.path(), game, workers, cancel, &mut stats)?;
+    progress(report, "Scanning", 94.0, "正在完成资源校验…".into(), 0, 0);
     stats.elapsed_seconds = start.elapsed().as_secs_f64();
     check_cancel(cancel)?;
     progress(
@@ -529,7 +521,7 @@ pub fn unpack(
             game.display_name(),
             apk.display(),
             keys.join("\n"),
-            extracted,
+            stats.assets_extracted,
             stats.plists_scanned,
             stats.atlases_decoded,
             stats.frames_written,
@@ -710,6 +702,8 @@ mod tests {
                 ("assets/res/three.PNG", &czzf),
                 ("assets/plain.png", &png),
                 ("assets/broken.png", &bad_crc),
+                ("assets/empty.PNG", &[]),
+                ("assets/short.png", &[1, 2, 3]),
             ]),
         )
         .unwrap();
@@ -732,10 +726,83 @@ mod tests {
             assert_eq!(fs::read(output.join(path)).unwrap(), png);
         }
         assert_eq!(fs::read(output.join("broken.png")).unwrap(), bad_crc);
+        assert!(fs::read(output.join("empty.PNG")).unwrap().is_empty());
+        assert_eq!(fs::read(output.join("short.png")).unwrap(), [1, 2, 3]);
         assert_eq!(
             fs::read_dir(output.join("Unpacked_PNG")).unwrap().count(),
             0
         );
+    }
+
+    #[test]
+    fn splits_wrapped_png_texture_after_decrypting_during_extraction() {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("texture.apk");
+        let texture = root.path().join("texture.png");
+        let rgba = [123, 45, 67, 89];
+        atlas::write_png(&texture, 1, 1, &rgba).unwrap();
+        let png = fs::read(texture).unwrap();
+        let wrapped = codec::make_test_custom(&png, &crate::profile::CARROT4_PLIST, 8);
+        let plist = br#"<?xml version="1.0"?><plist version="1.0"><dict>
+            <key>frames</key><dict><key>sprite.png</key><dict>
+            <key>frame</key><string>{{0,0},{1,1}}</string>
+            <key>sourceSize</key><string>{1,1}</string></dict></dict>
+            <key>metadata</key><dict><key>textureFileName</key><string>atlas.png</string>
+            </dict></dict></plist>"#;
+        fs::write(
+            &input,
+            make_zip(&[
+                ("assets/res/atlas.png", &wrapped),
+                ("assets/res/atlas.plist", plist),
+            ]),
+        )
+        .unwrap();
+        let stats = unpack(
+            &input,
+            &root.path().join("out"),
+            Game::Carrot4,
+            false,
+            2,
+            &AtomicBool::new(false),
+            &|_| {},
+        )
+        .unwrap();
+        assert_eq!(stats.decrypted_standalone_pngs, 1);
+        assert_eq!(stats.frames_written, 1);
+        assert!(stats.warnings.is_empty());
+        let output = Path::new(&stats.output_path);
+        assert_eq!(fs::read(output.join("res/atlas.png")).unwrap(), png);
+        let sprite = fs::read(output.join("Unpacked_PNG/res/atlas/sprite.png")).unwrap();
+        assert_eq!(atlas::decode_png(&sprite).unwrap().pixels, rgba);
+    }
+
+    #[test]
+    fn corrupt_zip_png_rolls_back_instead_of_becoming_a_decode_warning() {
+        let root = tempfile::tempdir().unwrap();
+        let input = root.path().join("corrupt.apk");
+        let mut bytes = make_zip(&[("assets/bad.png", b"czzf damaged wrapper")]);
+        let mut archive = zip::ZipArchive::new(std::io::Cursor::new(&bytes)).unwrap();
+        let data_start = archive.by_index(0).unwrap().data_start() as usize;
+        drop(archive);
+        bytes[data_start + 8] ^= 1;
+        fs::write(&input, bytes).unwrap();
+        let parent = root.path().join("out");
+        fs::create_dir_all(parent.join("corrupt")).unwrap();
+        fs::write(parent.join("corrupt/previous"), b"keep").unwrap();
+        assert!(
+            unpack(
+                &input,
+                &parent,
+                Game::Carrot4,
+                true,
+                1,
+                &AtomicBool::new(false),
+                &|_| {},
+            )
+            .is_err()
+        );
+        assert_eq!(fs::read(parent.join("corrupt/previous")).unwrap(), b"keep");
+        assert_eq!(fs::read_dir(parent).unwrap().count(), 1);
     }
     #[test]
     fn reject_windows_path_aliases_and_traversal() {

@@ -1,6 +1,6 @@
 [package]
 name = "cfunpacker"
-version = "2.0.0"
+version = "2.0.1"
 edition = "2024"
 description = "Native Carrot Fantasy APK asset unpacker"
 build = "build.rs"
@@ -23,6 +23,7 @@ anyhow = "1"
 clap = { version = "4", features = ["derive"] }
 crc32fast = "1"
 ctrlc = "3"
+fdeflate = "0.3"
 flate2 = { version = "1", default-features = false, features = ["zlib-rs"] }
 plist = "1"
 png = "0.17"

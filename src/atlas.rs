@@ -571,21 +571,17 @@ pub fn write_png(path: &Path, width: u32, height: u32, rgba: &[u8]) -> Result<()
     PngEncoder::new().write(path, width, height, rgba)
 }
 
-// Keep the compressor's dictionary and buffers between frames in an atlas.
-// Resetting its stream preserves allocations without carrying data across PNGs.
+// Retain scanline and IDAT allocations across frames. fdeflate's compressor
+// has no dictionary allocation and starts a separate zlib stream for each PNG.
 struct PngEncoder {
-    compressor: flate2::Compress,
     scanlines: Vec<u8>,
-    compressed: Vec<u8>,
     idat: Vec<u8>,
 }
 
 impl PngEncoder {
     fn new() -> Self {
         Self {
-            compressor: flate2::Compress::new(flate2::Compression::fast(), true),
             scanlines: Vec::new(),
-            compressed: vec![0; 64 * 1024],
             idat: Vec::with_capacity(64 * 1024),
         }
     }
@@ -608,60 +604,34 @@ impl PngEncoder {
         let scanline_bytes = row_bytes + 1;
         let rows_per_batch = (256 * 1024 / scanline_bytes).max(1).min(height as usize);
         self.scanlines.resize(scanline_bytes * rows_per_batch, 0);
-        self.compressor.reset();
         let mut idat = PngIdatWriter {
             output: &mut output,
             pending: std::mem::take(&mut self.idat),
+            error: None,
         };
-        for source in rgba.chunks(row_bytes * rows_per_batch) {
-            for (row, pixels) in source.chunks_exact(row_bytes).enumerate() {
-                let start = row * scanline_bytes;
-                self.scanlines[start] = 0;
-                self.scanlines[start + 1..start + scanline_bytes].copy_from_slice(pixels);
+        {
+            let mut compressor = fdeflate::Compressor::new(&mut idat)?;
+            for source in rgba.chunks(row_bytes * rows_per_batch) {
+                for (row, pixels) in source.chunks_exact(row_bytes).enumerate() {
+                    let start = row * scanline_bytes;
+                    let target = &mut self.scanlines[start..start + scanline_bytes];
+                    target[0] = 1; // Sub: subtract the preceding RGBA pixel, byte for byte.
+                    target[1..5].copy_from_slice(&pixels[..4]);
+                    for (byte, (&current, &left)) in
+                        target[5..].iter_mut().zip(pixels[4..].iter().zip(pixels))
+                    {
+                        *byte = current.wrapping_sub(left);
+                    }
+                }
+                compressor
+                    .write_data(&self.scanlines[..source.len() + source.len() / row_bytes])?;
             }
-            compress_png(
-                &mut self.compressor,
-                &self.scanlines[..source.len() + source.len() / row_bytes],
-                &mut self.compressed,
-                &mut idat,
-                flate2::FlushCompress::None,
-            )?;
+            compressor.finish()?;
         }
-        compress_png(
-            &mut self.compressor,
-            &[],
-            &mut self.compressed,
-            &mut idat,
-            flate2::FlushCompress::Finish,
-        )?;
         self.idat = idat.complete()?;
         write_png_chunk(&mut output, b"IEND", &[])?;
         output.flush()?;
         Ok(())
-    }
-}
-
-fn compress_png(
-    compressor: &mut flate2::Compress,
-    mut source: &[u8],
-    buffer: &mut [u8],
-    output: &mut impl Write,
-    flush: flate2::FlushCompress,
-) -> Result<()> {
-    loop {
-        let before_in = compressor.total_in();
-        let before_out = compressor.total_out();
-        let status = compressor.compress(source, buffer, flush)?;
-        let consumed = (compressor.total_in() - before_in) as usize;
-        let written = (compressor.total_out() - before_out) as usize;
-        output.write_all(&buffer[..written])?;
-        source = &source[consumed..];
-        if status == flate2::Status::StreamEnd
-            || (source.is_empty() && written < buffer.len() && flush == flate2::FlushCompress::None)
-        {
-            return Ok(());
-        }
-        ensure!(consumed > 0 || written > 0, "PNG 压缩未能继续");
     }
 }
 
@@ -678,6 +648,7 @@ fn write_png_chunk(output: &mut impl Write, kind: &[u8; 4], payload: &[u8]) -> i
 struct PngIdatWriter<'a, W: Write> {
     output: &'a mut W,
     pending: Vec<u8>,
+    error: Option<io::Error>,
 }
 
 impl<W: Write> PngIdatWriter<'_, W> {
@@ -695,13 +666,24 @@ impl<W: Write> Write for PngIdatWriter<'_, W> {
             self.pending.extend_from_slice(&source[..copy]);
             source = &source[copy..];
             if self.pending.len() == 64 * 1024 {
-                self.flush()?;
+                // fdeflate 0.3 unwraps some short writes at stream finalization.
+                // Save I/O failures until complete(), where they remain ordinary
+                // unpack errors and the staging directory can be rolled back.
+                if self.error.is_none()
+                    && let Err(error) = self.flush()
+                {
+                    self.error = Some(error);
+                }
+                self.pending.clear();
             }
         }
         Ok(count)
     }
 
     fn flush(&mut self) -> io::Result<()> {
+        if let Some(error) = self.error.take() {
+            return Err(error);
+        }
         if !self.pending.is_empty() {
             write_png_chunk(self.output, b"IDAT", &self.pending)?;
             self.pending.clear();
@@ -721,6 +703,33 @@ fn safe_output_path(root: &Path, name: &str) -> Result<PathBuf> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn png_compressor_preserves_io_errors_without_panicking() {
+        struct FullDisk;
+        impl Write for FullDisk {
+            fn write(&mut self, _: &[u8]) -> io::Result<usize> {
+                Err(io::Error::new(io::ErrorKind::StorageFull, "disk full"))
+            }
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+        let mut output = FullDisk;
+        let mut idat = PngIdatWriter {
+            output: &mut output,
+            pending: Vec::with_capacity(64 * 1024),
+            error: None,
+        };
+        idat.write_all(&vec![0; 64 * 1024 - 4]).unwrap();
+        let mut compressor = fdeflate::Compressor::new(&mut idat).unwrap();
+        compressor.write_data(b"RGBA pixels").unwrap();
+        compressor.finish().unwrap();
+        assert_eq!(
+            idat.complete().unwrap_err().kind(),
+            io::ErrorKind::StorageFull
+        );
+    }
 
     #[test]
     fn png_encoder_resets_between_different_frame_sizes() {
